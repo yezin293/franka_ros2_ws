@@ -20,6 +20,9 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
 JOINTS = [f'fr3_joint{i}' for i in range(1, 8)]
 GROUP = 'fr3_arm'
@@ -147,6 +150,25 @@ class Fr3Motion(Node):
         self._home_gripper = ActionClient(self, Homing, '/franka_gripper/homing')
         self._move_gripper = ActionClient(self, Move, '/franka_gripper/move')
         self._grasp_gripper = ActionClient(self, Grasp, '/franka_gripper/grasp')
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+
+    def current_tcp_pose(self, timeout=5.0):
+        """Current fr3_hand_tcp pose in BASE_FRAME, as (x, y, z, qx, qy, qz, qw).
+        Used for calibration -- e.g. jog the robot to touch a known physical
+        point, then read this to get that point's coordinate in robot frame
+        (more accurate than measuring with a ruler)."""
+        end = self.get_clock().now().nanoseconds + int(timeout * 1e9)
+        last_exc = None
+        while rclpy.ok() and self.get_clock().now().nanoseconds < end:
+            try:
+                t = self._tf_buffer.lookup_transform(BASE_FRAME, TCP_LINK, rclpy.time.Time())
+                tr, q = t.transform.translation, t.transform.rotation
+                return (tr.x, tr.y, tr.z, q.x, q.y, q.z, q.w)
+            except TransformException as e:
+                last_exc = e
+                rclpy.spin_once(self, timeout_sec=0.1)
+        raise RuntimeError(f'no TF {BASE_FRAME}->{TCP_LINK} after {timeout}s: {last_exc}')
 
     def _on_state(self, msg):
         self._latest = dict(zip(msg.name, msg.position))
@@ -278,7 +300,7 @@ class Fr3Motion(Node):
             self.execute(trajectory)
 
     def pick(self, pose_stamped, approach_height=0.1, width=0.0, speed=0.1, force=20.0,
-              scaling=0.1, cartesian_scaling=1.0, dry_run=False):
+              scaling=0.1, cartesian_scaling=1.0, dry_run=False, epsilon=0.005):
         """Approach above pose_stamped (TCP_LINK) freely, descend/retreat in a
         straight line, grasp in between. dry_run=True only plans+prints each
         leg (check RViz) -- no activate/execute/gripper calls, nothing moves
@@ -299,7 +321,8 @@ class Fr3Motion(Node):
             self._plan_leg('approach', approach, scaling, dry_run)
             self.open_gripper(speed=speed)
             self._plan_leg('descend', pose_stamped, cartesian_scaling, dry_run, cartesian=True)
-            self.grasp(width, speed=speed, force=force)
+            self.grasp(width, speed=speed, force=force,
+                       epsilon_inner=epsilon, epsilon_outer=epsilon)
             self._plan_leg('retreat', approach, cartesian_scaling, dry_run, cartesian=True)
         finally:
             self.deactivate_arm()
@@ -333,8 +356,12 @@ class Fr3Motion(Node):
         goal = MoveGroup.Goal()
         req = goal.request
         req.group_name = GROUP
-        req.num_planning_attempts = 1
-        req.allowed_planning_time = 5.0
+        # OMPL is sampling-based -- a single attempt can fail on a reachable,
+        # collision-free goal purely from bad luck, especially with tight
+        # position/orientation tolerances. Let it retry internally with
+        # different random seeds instead of surfacing a one-off failure.
+        req.num_planning_attempts = 10
+        req.allowed_planning_time = 10.0
         req.max_velocity_scaling_factor = scaling
         req.max_acceleration_scaling_factor = scaling
         req.start_state.is_diff = True
@@ -375,8 +402,12 @@ class Fr3Motion(Node):
         goal = MoveGroup.Goal()
         req = goal.request
         req.group_name = GROUP
-        req.num_planning_attempts = 1
-        req.allowed_planning_time = 5.0
+        # OMPL is sampling-based -- a single attempt can fail on a reachable,
+        # collision-free goal purely from bad luck, especially with tight
+        # position/orientation tolerances. Let it retry internally with
+        # different random seeds instead of surfacing a one-off failure.
+        req.num_planning_attempts = 10
+        req.allowed_planning_time = 10.0
         req.max_velocity_scaling_factor = scaling
         req.max_acceleration_scaling_factor = scaling
         req.start_state.is_diff = True

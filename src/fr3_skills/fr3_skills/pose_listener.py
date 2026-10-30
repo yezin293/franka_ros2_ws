@@ -1,6 +1,8 @@
 """Subscribe to a PoseStamped topic and move fr3_arm there.
 
 Publish target poses in the fr3_link0 frame (planning frame in moveit.rviz).
+The target is the gripper fingertip (fr3_hand_tcp), not fr3_link8 -- motion.py
+converts internally.
 
   ros2 run fr3_skills pose_listener                  # plan only each time (watch RViz)
   ros2 run fr3_skills pose_listener --execute         # also move -- activates/deactivates
@@ -12,7 +14,7 @@ import argparse
 import rclpy
 from geometry_msgs.msg import PoseStamped
 
-from fr3_skills.motion import Fr3Motion
+from fr3_skills.motion import TCP_LINK, Fr3Motion
 
 
 def main():
@@ -41,7 +43,7 @@ def main():
             msg = pending.pop(0)
             try:
                 start = motion.current_joints()
-                trajectory = motion.plan_to_pose(msg, args.scaling)
+                trajectory = motion.plan_to_pose(msg, args.scaling, link_name=TCP_LINK)
                 print(motion.describe(trajectory, start))
                 if not args.execute:
                     print('plan only (not executed) -- check RViz, rerun with --execute to move for real')

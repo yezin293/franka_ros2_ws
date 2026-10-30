@@ -32,6 +32,8 @@ def main():
     parser.add_argument('--place', nargs=3, type=float, required=True, metavar=('X', 'Y', 'Z'))
     parser.add_argument('--width', type=float, default=0.0, help='grasp target width [m]')
     parser.add_argument('--force', type=float, default=20.0, help='grasp force [N]')
+    parser.add_argument('--epsilon', type=float, default=0.005,
+                         help='grasp width tolerance [m] -- widen if --width is a rough estimate')
     parser.add_argument('--approach-height', type=float, default=0.1, help='retreat height [m]')
     parser.add_argument('--scaling', type=float, default=0.1)
     parser.add_argument('--execute', action='store_true',
@@ -45,7 +47,7 @@ def main():
         motion.ensure_table_collision()
         motion.pick(make_pose(args.pick), approach_height=args.approach_height,
                     width=args.width, force=args.force, scaling=args.scaling,
-                    dry_run=dry_run)
+                    dry_run=dry_run, epsilon=args.epsilon)
         print('picked.' if not dry_run else 'pick: plan only (not executed)')
         motion.place(make_pose(args.place), approach_height=args.approach_height,
                      scaling=args.scaling, dry_run=dry_run)

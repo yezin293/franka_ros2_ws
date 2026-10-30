@@ -1,8 +1,10 @@
 # Claude 인수인계 — Franka 실물 제어
 
-최종 기록: 2026-10-12 오후 (한국 시간). 이 문서를 먼저 읽고 PROJECT_CONTEXT.md 및 FRANKA_PROJECT_PLAN_KO.md를 참고한다. 과거 기록과 충돌하면 최신 날짜의 확인된 결과를 우선한다. 저장 시점의 실시간 로봇 상태는 조회하지 않았다. 맨 아래 "2026-10-12 오후 — 카메라 연결, 호모그래피 보정, 색상 검출 → 실물 이동 파이프라인 완성" 절이 가장 최신.
+최종 기록: 2026-10-30 (한국 시간). 이 문서를 먼저 읽고 PROJECT_CONTEXT.md 및 FRANKA_PROJECT_PLAN_KO.md를 참고한다. 과거 기록과 충돌하면 최신 날짜의 확인된 결과를 우선한다. 저장 시점의 실시간 로봇 상태는 조회하지 않았다. 맨 아래 "2026-10-29~30 — KAERI 이전, ArUco/체커보드 재보정, 실물 pick-place 성공, 라이브 비전 파이프라인 재설계" 절이 가장 최신. **하드웨어가 KAERI로 이전했고, 위쪽(2026-10-12 이전)의 테이블/환경 관련 기록은 대학 연구실 기준이라 더 이상 안 맞을 수 있다 — 물리 배치는 맨 아래 최신 절 기준.**
 
-**Git 커밋이 밀려있다.** 오전 작업은 커밋됨(`5bbe7bb`)이지만, 오후 카메라 작업(스크립트 5개, `object_pose_publisher.py`)은 아직 커밋/푸시 안 됨. 다른 컴퓨터에서 이어서 작업하면 이 내용이 없다 — 먼저 `git status`로 확인할 것.
+**Git 커밋이 밀려있다.** 2026-10-12 오후 작업부터 쭉 커밋/푸시 안 됨(스크립트 다수, `object_pose_publisher.py`, `motion.py`/`pose_listener.py`/`pick_place.py`/`vision_pick_place.py`, `config/vision_pick_place.yaml`, 캘리브레이션 결과물 등). 다른 컴퓨터에서 이어서 작업하면 이 내용이 없다 — 먼저 `git status`로 확인할 것.
+
+**2026-10-30 중 실물 충돌/리플렉스로 추정되는 정지가 있었지만 같은 세션에서 복구 완료**(맨 아래 "9. 실물 충돌/리플렉스 복구 — 해결됨" 절 — bringup 재기동 전체 순서 포함), 이후 비전 파이프라인(큐브 pick-place) 실물 성공까지 확인됨("11. 비전 파이프라인 실물 성공" 절).
 
 **2026-10-07부터 작업 환경이 바뀌었다.** 아래 과거 기록(2026-10-02 이전)의 워크스페이스 경로 `/home/research_108_01/franka_ros2_ws`, 계정 `research_108_01`, 이더넷 `enp129s0`는 **옛 노트북(HP OMEN) 기준**이다. 현재는 **새 노트북(hostname wynz-NUC11PHi7, 계정 wynz, 워크스페이스 `~/franka_ros2_ws` = `/home/wynz/franka_ros2_ws`, 이더넷 `enp89s0`)**로 GitHub 저장소를 통해 이전했다. 자세한 내용은 맨 아래 "2026-10-07 오후 (새 노트북 NUC11PHi7)", "2026-10-07 저녁 — move_to_pose + pose_listener", "2026-10-08 — 그리퍼 실물 검증 + RViz 연동 + 제어 통합", "2026-10-08 오후~저녁 — pick/place, 실물 충돌 사고·복구, 테이블 모델 정밀 보정" 절 참고.
 
@@ -432,3 +434,89 @@ Codex 응답이2~3회 질문 뒤 멈추고 재접속하면 복구된다는 사�
 6. 외부 인에이블링 장치(펜던트) 확보 여부 확인 — 미해결.
 7. conda 자동 활성화 영구 비활성화 여부 결정 — 긴급하지 않음.
 8. migration/MIGRATION_KO.md 패치 재생성 필요 — franka_ros2를 여러 번 더 수정해서 크게 어긋남.
+
+## 2026-10-29~30 (Claude) — KAERI 이전, ArUco/체커보드 재보정, 실물 pick-place 성공, 라이브 비전 파이프라인 재설계
+
+**하드웨어가 한국원자력연구원(KAERI)으로 통째로 이전했다.** 대학 연구실 테이블(위 "테이블 충돌 모델" 절들) 대신: 검은 받침대 위 로봇, 서랍형 트레이 2개(왼쪽=pick, 원통/큐브, 오른쪽=place, 비어있음), 프로파일 기둥에 고정된 OBSBOT Tiny 2 Lite 카메라. KAERI 프로젝트 문서가 명시적으로 ArUco 마커+카메라 캘리브레이션+`solvePnP` 방식을 요구해서(수동 픽셀 클릭 아님), 기존 `scripts/calibrate_homography.py` 기반 2D 호모그래피는 전부 무효화하고 처음부터 다시 짰다. 아래는 이번 세션(두 세션 연속)에서 실제로 겪은 문제와 최종 해결을 순서대로 기록.
+
+### 1. 핵심 설계: 마커/체커보드 모서리를 로봇 그리퍼로 직접 터치해서 robot-frame 3D 좌표를 얻는다
+
+마커 자체 좌표계를 따로 정의하고 로봇좌표로 변환하는 간접 방식 대신, **물리적 모서리를 닫은 그리퍼로 직접 터치해서 로봇 인코더로 robot-frame xyz를 바로 측정**한다. 이걸 `cv2.aruco`/`cv2.findChessboardCorners`가 사진에서 찾은 같은 지점의 픽셀좌표와 짝지어 `cv2.solvePnP(object_points=robot_xyz들, image_points=pixel들, camera_matrix, dist_coeffs)`에 넣으면 카메라의 포즈가 **곧바로 로봇 베이스 기준**으로 나온다. 마커좌표계↔로봇좌표계 중간 변환이 필요 없다.
+
+- `fr3_skills/motion.py`에 `current_tcp_pose()` 추가 — tf2 `TransformListener`로 `fr3_link0`→`fr3_hand_tcp` 조회. `package.xml`에 `tf2_ros` exec_depend 추가. 핸드가이딩(Desk에서 관절 unlock) 중에도 TF/ROS 데이터가 정상 흐르는 것 확인됨.
+- `scripts/record_touch_point.py` 신규 — 그 자리에서 `current_tcp_pose()` 한 번 읽어서 `scripts/touch_points.json`에 이름 붙여 누적 저장. `ros2 run`이 아니라 `source install/setup.bash && /usr/bin/python3 scripts/record_touch_point.py --name NAME`로 직접 실행(콘솔스크립트 아님).
+
+### 2. 카메라 인트린식 캘리브레이션 — 체커보드로 성공
+
+`scripts/calibrate_intrinsics_from_folder.py`(폴더 안 모든 사진에 `cv2.findChessboardCorners`+`cornerSubPix` 돌려서 `cv2.calibrateCamera`, GUI 불필요)로 성공. 사용자가 실시간 GUI 캡처(`calibrate_intrinsics.py`)가 느리다며 `cheese`로 직접 찍은 사진 45장(11x8칸, 한 칸 16mm 체커보드)을 폴더 캡처 스크립트에 넣음 — 37/45장 유효, **RMS 재투영오차 0.690px**. 결과 `scripts/camera_intrinsics.json`.
+
+### 3. 외부(extrinsics) 캘리브레이션 — 시행착오 끝에 큰 체커보드로 해결
+
+1. **1차: ArUco 마커(25mm) 1개만 — 실패.** `scripts/generate_aruco_marker.py`(--id 인자화)로 생성한 DICT_4X4_50 마커를 로봇이 직접 4모서리 터치, `cv2.solvePnP`(4점은 DLT 최소점수 미달이라 `SOLVEPNP_EPNP` 사용)로 계산. 마커 자체 지점은 재투영오차 9.5px로 괜찮아 보였지만, **원통(마커에서 15~20cm 떨어진 곳)으로 검증하니 로봇좌표가 11~13cm나 틀어짐** — 2.5cm짜리 마커 하나로 캘리브레이션하면 베이스라인이 너무 좁아서 작은 회전오차가 먼 곳에서 크게 증폭되는 전형적 문제(solvePnP의 외삽 한계).
+2. **2차: 같은 마커를 두 위치로 옮겨서 촬영 — 실패.** 두 사진의 카메라 자세가 완전히 같아야 하는데, OBSBOT 짐벌이 USB 재연결/파워사이클마다 tilt 제어값이 안 맞아(아래 "카메라 고질병" 참고) 두 사진 사이에 실제로 각도가 미세하게 달라짐 — 합치니 오차가 더 커짐(17~22px). 같은 세션에서 카메라를 전혀 안 건드리고 연속 촬영해도(두 사진을 정확히 같은 tilt/pan 값으로 재확인 후 촬영) 여전히 나쁨(22px, 비현실적 카메라 위치) — 짐벌 제어값이 같아도 실제 기계적 반복정밀도가 부족한 것으로 추정.
+3. **3차: 마커 + 수동으로 고른 볼트머리 2개 — 부분 실패.** 트레이 안의 작은 실리스 볼트머리(밝은 금속, 둥근 모양)를 색 임계값으로 찾아 픽셀좌표를 수동 추정, 로봇으로 터치. 볼트 1개씩 따로 넣으면 꽤 좋음(마커+오른쪽볼트: 교차검증 5.6mm/18.5mm), 그런데 **볼트 2개를 동시에 넣으면 오히려 나빠짐**(20~57px) — `cv2.solvePnPRansac`로 확인해보니 마커4점+볼트1개가 최대 일관된 부분집합, 볼트 2개는 서로 모순(수동 픽셀피킹 오차 추정). 실사용 테스트(원통 위치 계산)에서 5~8cm 오차로 아직 부족.
+4. **4차(최종): 큰 체커보드(10x7칸, 25mm) — 성공.** 사용자가 이미 인쇄해둔 큰 체커보드를 두 트레이에 걸치도록 평평하게 놓고, **네 귀퉁이 내부 코너 4개만** 로봇으로 터치 → 나머지 50개 코너는 그 4점 사이 bilinear 보간으로 robot-frame 좌표 계산 → 54점 전부로 `solvePnP`. 마커(2.5cm)보다 훨씬 넓은 베이스라인(가로22cm×세로13~14cm)이 핵심. 결과: **평균 재투영오차 1.96px, 최대 6.03px**. 독립 검증(볼트, 마커코너 — 이번 솔브에 안 쓰인 점들): 5.6mm~29.8mm, 평균 약 23mm — 충분히 쓸만한 정확도로 판단하고 최종 채택.
+   - 신규 `scripts/calibrate_extrinsics.py`(ArUco 세션, `--session PHOTO PREFIX` 반복 + `--extra-point PX PY NAME`로 수동점 추가 가능, `classify_by_camera_view()`로 카메라에서 보이는 위치(top_left 등)별로 자동 분류 — cv2.aruco 내부 모서리 순서가 사진 회전에 따라 직관과 안 맞아서 생긴 혼선을 "색깔로 지정→사용자가 해당 색 점을 터치"로 해결).
+   - 신규 `scripts/calibrate_extrinsics_checkerboard.py`(`label`/`solve` 서브커맨드, bilinear 보간 로직 포함) — 최종 채택된 방식.
+   - 결과 `scripts/camera_extrinsics.json` (rvec, tvec, camera_position_in_robot_frame, reprojection error).
+
+### 4. OBSBOT 카메라 짐벌 고질병 — 세션 내내 반복된 방해 요인, 다음에 반드시 영구 조치 필요
+
+두 가지 서로 다른 증상이 섞여 있었다:
+- **USB autosuspend**: `/sys/bus/usb/devices/3-2.1/power/control`이 기본 `auto`라 2초 유휴 후 절전모드 진입 → pan/tilt 절대값 제어(`v4l2-ctl --set-ctrl=tilt_absolute=...`)가 조용히 안 먹힘(영상 스트리밍 자체는 살아있어서 헷갈림). `echo on | sudo tee /sys/bus/usb/devices/3-2.1/power/control`로 그때그때 해결했지만, **USB 재연결(replug)마다 매번 auto로 리셋**되어 반복 필요했음. **영구 해결 후보**: udev 규칙(`/etc/udev/rules.d/`)으로 이 USB 포트에 자동으로 `power/control=on`을 적용 — 아직 안 함.
+- **중력 처짐/완전 멈춤**: USB 전원과 무관하게 수 분 유휴 후 tilt이 바닥(-302400, 최솟값 근처)으로 처지거나, 아예 `--set-ctrl` 자체가 반영 안 되는 "완전 멈춤" 상태가 됨 — 이땐 USB 케이블 물리적 재연결(뽑았다 꽂기)만 해결됨. 원인 미상(펌웨어 유휴 시 짐벌 홀딩토크 해제 추정). 거의 매 사진촬영 전마다 재발해서 재확인 필요했음.
+- 작업용 고정 각도: `tilt_absolute≈-115200~-122400`(약 -32°), `pan_absolute=18000`(약 5°), `zoom_absolute=0` — 두 트레이와 마커/물체가 다 보이는 각도. 재연결 후 항상 이 값으로 재설정.
+
+### 5. `object_pose_publisher.py` — 호모그래피 대신 픽셀→광선→평면교차로 교체
+
+`pixel_to_robot_xy()`: `cv2.undistortPoints`로 픽셀을 정규화 카메라좌표로 역투영 → extrinsics의 R(로봇→카메라 회전)로 광선을 로봇좌표계로 변환 → 카메라 위치(`-R.T @ tvec`)에서 그 광선을 따라가다 `z = surface_z`(트레이 바닥, `touch_points.json`의 `tray_surface` 터치값 0.0222m) 평면과의 교점을 계산. 물체 검출은 기존 파란색 HSV 대신 **어두운 물체(검정 원통/큐브) 임계값**(`DARK_THRESHOLD=70`)으로 교체 — 배경(의자, 옷 등 어두운 잡동사니)이 물체보다 크고 어두워서 전체 프레임에서 찾으면 엉뚱한 걸 잡음, **pick 트레이만의 픽셀 ROI**(`ROI=(1050,1450,1750,2160)`, 3840x2160 기준)로 제한해서 해결.
+
+### 6. 플래닝 버그 발견 및 수정 — `pose_listener`가 TCP 대신 link8로 목표를 잘못 해석
+
+실물 `pick_place --execute`에서 `planning failed: error_code -27`(나중엔 `99999`)과 함께 move_group 로그에 `Unable to sample any valid states for goal tree`. 원인: `motion.py`의 `plan_to_pose()` 주석에 이미 "`fr3_hand_tcp`를 `link_name`으로 바로 주면 GOAL_STATE_INVALID"라고 적혀 있었는데, **`pose_listener.py`가 `plan_to_pose(msg, scaling)`을 `link_name` 없이(기본값 `EE_LINK`=link8) 호출**하고 있어서, "그리퍼 끝이 가야 할 위치"로 publish된 pose를 "link8이 가야 할 위치"로 잘못 해석 — link8을 TCP보다 약 10.34cm 더 아래(테이블 밑)로 보내려는 목표가 돼서 당연히 IK가 안 풀렸음. `pose_listener.py`에 `link_name=TCP_LINK` 추가로 해결. 추가로 `plan_to_pose`/`plan_to_joints`의 `num_planning_attempts`를 1→10, `allowed_planning_time`을 5.0→10.0으로 올림(OMPL은 샘플링 기반이라 빡빡한 허용오차에서 1회 시도는 운 나쁘면 실패 — 표준적으로 여러 시도 허용이 맞다는 사용자 지적 반영).
+
+### 7. 실물 pick-and-place 첫 성공
+
+큐브(약 5cm 폭)를 pick 트레이에서 place 트레이로 실제로 집어서 옮기는 데 성공(`pick_place --execute`). 중간에 그리퍼 `grasp failed`(빈 메시지) 발생 — 원인은 `--width 0.0`(기본값)으로 줘서, 프랑카 그리퍼가 "폭 0인 물체"를 기대하고 실제 5cm 폭과 비교해 허용오차(기본 ±5mm) 밖이라 실패 처리한 것. `--width 0.05 --epsilon 0.02`로 해결(`pick()`/`pick_place.py`에 `--epsilon` 인자 신규 추가, 기본 0.005).
+
+### 8. 사용자 요청으로 아키텍처 재설계 — yaml 설정 + 실시간(스냅샷 아님) 발행 + 디버그 영상
+
+사용자가 "값 CLI로 매번 치지 말고 코드/yaml로", "사진 한 장 찍는 거 말고 실시간으로", "집은 물체 박스쳐서 볼 수 있는 웹캠 뷰"를 요청. 아래로 재구현:
+
+- **`fr3_skills/config/vision_pick_place.yaml` 신규** — place 위치, pick_z, 물체폭, epsilon, force, approach_height, scaling, 카메라 device/해상도, topic, publish_rate_hz, surface_z, intrinsics/extrinsics 경로 전부 여기서 관리. `--symlink-install`이라 내용 수정만으로는 재빌드 불필요(새 파일 추가 시엔 1회 빌드 필요).
+- **`object_pose_publisher.py` 전면 재작성** — 한 번 찍고 끝나는 구조에서 **Ctrl+C할 때까지 계속** 카메라 프레임을 읽어 검출→`/object_pose`에 publish하는 루프로 변경(기본 2Hz, yaml의 `publish_rate_hz`). `detect()`를 `(centroid, box)` 반환으로 분리하고 `annotate()`로 ROI/박스/중심점을 그린 디버그 프레임을 매 사이클 `<topic>/debug_image`(`sensor_msgs/Image`, `cv_bridge` 없이 수동 구성, 이 프로젝트에서 이미 쓰던 패턴)로도 publish — `ros2 run rqt_image_view rqt_image_view /object_pose/debug_image`로 라이브 확인 가능.
+- **`vision_pick_place.py` 신규** — 더 이상 직접 카메라를 열지 않고 `/object_pose`를 **구독**해서 최신 라이브 좌표를 받아 pick→place→home을 한 번에 실행, 단계별(`[1]`~`[4]`) 상태 출력. `fr3_skills/setup.py`에 콘솔스크립트 등록.
+- 사용법: 터미널1 `ros2 run fr3_skills object_pose_publisher`(계속 띄워둠) + 터미널2 `ros2 run fr3_skills vision_pick_place [--execute]`.
+- **이 재설계는 아직 실물에서 끝까지 검증 안 됨** — 바로 다음에 서술할 충돌로 중단됨.
+
+### 9. 실물 충돌/리플렉스 복구 — 해결됨
+
+`vision_pick_place`(구 `pick_place`) 실행 중 트레이 접촉으로 추정되는 정지가 있었으나(8번 절), **사용자가 Desk에서 로봇을 정상 재기동**해서 해결됨. 전체 bringup 순서를 정리해서 전달:
+
+```bash
+# 0) Desk(https://172.16.0.2/desk/)에서 Unlock + Activate FCI (브라우저)
+# 1) cd ~/franka_ros2_ws && source /opt/ros/humble/setup.bash && source install/setup.bash
+# 2) 터미널1 (계속 띄움): ros2 launch franka_bringup franka.launch.py robot_ip:=172.16.0.2 arm_id:=fr3 use_fake_hardware:=false load_gripper:=true
+# 3) 터미널2 (계속 띄움): ros2 launch franka_fr3_moveit_config move_group.launch.py robot_ip:=172.16.0.2 load_gripper:=true execute:=true
+# 4) 터미널3 (세션당 1회): ros2 run controller_manager spawner fr3_arm_controller --inactive -p src/franka_ros2/franka_fr3_moveit_config/config/fr3_arm_controller_real.yaml
+# 5) ros2 run fr3_skills move_home --execute   # 정상 작동 확인됨
+```
+
+`move_home --execute` 정상 확인 후, 트레이 중앙 쪽에 큐브를 놓고 비전 파이프라인 재시도 — 아래 10번 절 참고. 트레이 가장자리 충돌의 근본적 방지(안전마진/검출 로직)는 여전히 미착수, 당분간은 "물체를 트레이 중앙에 최대한 가깝게 놓기"로 회피하기로 사용자와 합의.
+
+### 10. OBSBOT AI 사람 추적 기능이 진짜 원인이었다 — 세션 내내 쫓던 "랜덤 드리프트"의 정체
+
+udev 규칙(위 다음에 할 일 3번, 이제 해결됨)으로 USB autosuspend는 고쳤는데도 tilt/pan이 우리가 설정한 값과 다른 이상한 값(예: 목표 -115200인데 실제 -64800)으로 자꾸 바뀌는 게 재발 → 사용자가 "저거 자꾸 나(사람)를 따라온다"고 지적. **OBSBOT Tiny 2 Lite 자체의 AI 사람 추적 기능이 우리 수동 pan/tilt 제어와 계속 싸우고 있었던 것** — v4l2 표준 컨트롤에는 이 기능을 끄는 항목이 없음(OBSBOT 독자 프로토콜). 웹 검색으로 확인한 끄는 법: **카메라 렌즈에 손바닥을 펴서 1~2초 보여주는 제스처**로 추적 모드 토글(파란불 두 번 깜빡 → 초록불 고정 = 꺼짐). 앱이나 리모컨 없이 가능. **중력처짐/완전멈춤(세션 내내 반복된 또 다른 증상)과는 별개 원인**이니 구분해서 대응할 것 — (a) 추적 켜짐=랜덤한 값으로 계속 움직임→제스처로 끄기, (b) 중력처짐/완전멈춤=tilt이 바닥 근처에 고정되고 set-ctrl이 안 먹힘→USB 재연결.
+
+### 11. 비전 파이프라인 실물 성공 (큐브)
+
+재기동 후 `object_pose_publisher`(터미널4, 라이브) + `vision_pick_place --execute`(터미널5)로 재시도. 1차 시도: 물리적으로는 성공적으로 집었는데(사용자 확인: "잡았는데 안잡았다고 해") `grasp failed`(빈 에러)로 처리됨 — `config/vision_pick_place.yaml`의 `epsilon: 0.01`(허용폭 4~6cm)이 실제 큐브 폭(사용자 추정 "대충 5cm")과 실제 그립 결과 폭 사이 오차보다 타이트했던 것으로 추정. **`epsilon`을 0.025로 넓혀서 해결** — 이후 정상 동작 확인("일단은 잘 되는데"). `width: 0.05`는 유지.
+
+### 다음에 할 일 (Claude) — 최신
+
+1. Git 커밋/푸시 — 사용자가 이번 응답 이후 직접 수행 예정(전체 스크립트, `motion.py`/`pose_listener.py`/`object_pose_publisher.py`/`pick_place.py`/`vision_pick_place.py`, `config/vision_pick_place.yaml`, `scripts/99-obsbot-no-autosuspend.rules`, 생성된 마커/체커보드 이미지, json 캘리브레이션 결과물 등).
+2. 트레이 가장자리 충돌 방지 — pick 좌표가 트레이 경계에 가까울 때의 안전마진/검출 로직 보강(지금은 "중앙에 놓기"로 임시 회피 중).
+3. 검출 방식은 현재 색/명도 기반(`DARK_THRESHOLD`) 임시 — 사용자가 필요시 YOLO 등으로 교체 희망 의사 표명, 아직 미착수.
+4. 실제 pick 대상(원통)은 이번 세션 중 분실되어 큐브로만 검증함 — 원통으로도 재검증 필요.
+5. OBSBOT 중력처짐/완전멈춤 증상은 여전히 미해결(udev로 고친 건 autosuspend뿐) — 수 분 유휴 후 재발 가능, 매번 tilt 재설정/USB 재연결 필요.
+6. `width`/`epsilon` 값은 큐브 기준 추정치 — 다른 물체(원통 등)로 바꾸면 `config/vision_pick_place.yaml`에서 재조정 필요.

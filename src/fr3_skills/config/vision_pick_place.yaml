@@ -1,0 +1,24 @@
+# Defaults for object_pose_publisher (live detection loop) and
+# vision_pick_place (consumes it). Edit this file directly -- with
+# --symlink-install, changes are picked up on the next run, no rebuild needed.
+
+# -- camera / detection --
+device: 0
+cam_width: 3840
+cam_height: 2160
+topic: /object_pose
+publish_rate_hz: 2.0
+surface_z: 0.0222       # robot-frame z of the tray floor (touch_points.json 'tray_surface')
+intrinsics: scripts/camera_intrinsics.json
+extrinsics: scripts/camera_extrinsics.json
+
+# -- pick/place geometry --
+pick_z: 0.03            # TCP height to grasp at [m]
+place: [0.40, 0.15, 0.03]
+width: 0.05              # object width [m] -- gripper needs this to recognize a good grasp
+epsilon: 0.025           # grasp width tolerance [m] -- widened: physical grasps were
+                          # succeeding but the firmware still reported failure because
+                          # the real object width was outside the tighter band
+force: 20.0               # [N]
+approach_height: 0.1      # retreat/approach clearance [m]
+scaling: 0.1

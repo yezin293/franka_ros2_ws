@@ -1,0 +1,1 @@
+SUBSYSTEM=="usb", ATTR{idVendor}=="3564", ATTR{idProduct}=="fef9", TEST=="power/control", ATTR{power/control}="on"
