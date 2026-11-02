@@ -1,0 +1,478 @@
+{
+  "schema_version": 1,
+  "calibration_type": "eye_in_hand",
+  "method": "PARK",
+  "sample_count": 20,
+  "frames": {
+    "base": "fr3_link0",
+    "gripper": "fr3_link8",
+    "camera": "camera_color_optical_frame"
+  },
+  "board": {
+    "inner_corners": [
+      10,
+      7
+    ],
+    "square_size_m": 0.016
+  },
+  "image_size": [
+    640,
+    480
+  ],
+  "link8_T_camera_color_optical": {
+    "meaning": "Transforms points from camera_color_optical_frame into fr3_link8",
+    "matrix": [
+      [
+        0.713307103448934,
+        -0.7007456970157303,
+        0.012183771305781299,
+        0.004728227541451651
+      ],
+      [
+        0.7008516064732169,
+        0.713198235504847,
+        -0.01246204544542806,
+        -0.042647216034244095
+      ],
+      [
+        4.328052482110295e-05,
+        0.01742828123228648,
+        0.9998481150355206,
+        -0.0497815122897184
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "translation_m": [
+      0.004728227541451651,
+      -0.042647216034244095,
+      -0.0497815122897184
+    ],
+    "quaternion_xyzw": [
+      0.00807392266134167,
+      0.003279368094336901,
+      0.3785970074108289,
+      0.9255205905312562
+    ]
+  },
+  "camera_color_optical_T_link8": {
+    "meaning": "Inverse transform; transforms points from fr3_link8 into camera_color_optical_frame",
+    "matrix": [
+      [
+        0.7133071034489329,
+        0.7008516064732169,
+        4.328052482038684e-05,
+        0.026518846147148206
+      ],
+      [
+        -0.7007456970157294,
+        0.7131982355048472,
+        0.01742828123228637,
+        0.03459681052535415
+      ],
+      [
+        0.012183771305780857,
+        -0.012462045445428652,
+        0.9998481150355214,
+        0.049184872039106084
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "translation_m": [
+      0.026518846147148206,
+      0.03459681052535415,
+      0.049184872039106084
+    ],
+    "quaternion_xyzw": [
+      -0.008073922661341803,
+      -0.0032793680943369757,
+      -0.37859700741082875,
+      0.9255205905312563
+    ]
+  },
+  "estimated_fixed_board_pose_in_base": {
+    "matrix": [
+      [
+        -0.043238561944000165,
+        0.9988133510617783,
+        0.02241241847184747,
+        0.6358080682871532
+      ],
+      [
+        0.9990306772196178,
+        0.04304086077359708,
+        0.009229857960976378,
+        0.18589177668472012
+      ],
+      [
+        0.008254255576780757,
+        0.022789779389239796,
+        -0.9997062034519261,
+        0.037101555167359725
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "translation_m": [
+      0.6358080682871532,
+      0.18589177668472012,
+      0.037101555167359725
+    ],
+    "quaternion_xyzw": [
+      0.6916333531457128,
+      0.7221470809623071,
+      0.0110848739108479,
+      0.004901412492106199
+    ]
+  },
+  "validation": {
+    "all_sample_translation_error_mm": {
+      "mean": 6.59916445183258,
+      "rms": 7.471637092042461,
+      "max": 13.351811295575462
+    },
+    "all_sample_rotation_error_deg": {
+      "mean": 1.0888968314168666,
+      "rms": 1.2039054487177394,
+      "max": 2.0769320004678447
+    },
+    "leave_one_out_translation_error_mm": {
+      "mean": 7.0056207687086935,
+      "rms": 7.791334208937774,
+      "max": 12.007397592502175
+    },
+    "leave_one_out_rotation_error_deg": {
+      "mean": 1.2278749780362328,
+      "rms": 1.355158573004607,
+      "max": 2.345246456869281
+    }
+  },
+  "method_comparison": {
+    "TSAI": {
+      "all_sample_translation_error_mm": {
+        "mean": 6.938795662384159,
+        "rms": 7.923425189486096,
+        "max": 14.924990638792167
+      },
+      "all_sample_rotation_error_deg": {
+        "mean": 1.096168378267941,
+        "rms": 1.2057131787268796,
+        "max": 2.11103623123379
+      },
+      "leave_one_out_translation_error_mm": {
+        "mean": 7.371053881486143,
+        "rms": 8.295901286465439,
+        "max": 13.811391020498116
+      },
+      "leave_one_out_rotation_error_deg": {
+        "mean": 1.2353048646865874,
+        "rms": 1.355195632585573,
+        "max": 2.3050993839304046
+      }
+    },
+    "PARK": {
+      "all_sample_translation_error_mm": {
+        "mean": 6.59916445183258,
+        "rms": 7.471637092042461,
+        "max": 13.351811295575462
+      },
+      "all_sample_rotation_error_deg": {
+        "mean": 1.0888968314168666,
+        "rms": 1.2039054487177394,
+        "max": 2.0769320004678447
+      },
+      "leave_one_out_translation_error_mm": {
+        "mean": 7.0056207687086935,
+        "rms": 7.791334208937774,
+        "max": 12.007397592502175
+      },
+      "leave_one_out_rotation_error_deg": {
+        "mean": 1.2278749780362328,
+        "rms": 1.355158573004607,
+        "max": 2.345246456869281
+      }
+    },
+    "HORAUD": {
+      "all_sample_translation_error_mm": {
+        "mean": 6.597848444771732,
+        "rms": 7.474062712644407,
+        "max": 13.328383411114382
+      },
+      "all_sample_rotation_error_deg": {
+        "mean": 1.0889545086038213,
+        "rms": 1.2038979037285955,
+        "max": 2.077283178643662
+      },
+      "leave_one_out_translation_error_mm": {
+        "mean": 7.0019328475731015,
+        "rms": 7.792350394398219,
+        "max": 12.00549183879666
+      },
+      "leave_one_out_rotation_error_deg": {
+        "mean": 1.2278714556442036,
+        "rms": 1.355286798539758,
+        "max": 2.3526306342530066
+      }
+    },
+    "ANDREFF": {
+      "all_sample_translation_error_mm": {
+        "mean": 6.532552959225026,
+        "rms": 7.396556281313126,
+        "max": 12.724206834237656
+      },
+      "all_sample_rotation_error_deg": {
+        "mean": 1.0877720518674083,
+        "rms": 1.2042427127222337,
+        "max": 2.0609630125090526
+      },
+      "leave_one_out_translation_error_mm": {
+        "mean": 7.014124271864086,
+        "rms": 7.8410242361972164,
+        "max": 12.232391045831848
+      },
+      "leave_one_out_rotation_error_deg": {
+        "mean": 1.2117780232957278,
+        "rms": 1.3378961637543372,
+        "max": 2.3462250717263324
+      }
+    },
+    "DANIILIDIS": {
+      "all_sample_translation_error_mm": {
+        "mean": 7.067580302940831,
+        "rms": 7.864795291068783,
+        "max": 12.579405591785365
+      },
+      "all_sample_rotation_error_deg": {
+        "mean": 1.085392926112513,
+        "rms": 1.2054240383457664,
+        "max": 2.0426377802226394
+      },
+      "leave_one_out_translation_error_mm": {
+        "mean": 7.848647680328384,
+        "rms": 8.706086923834466,
+        "max": 13.690230747174768
+      },
+      "leave_one_out_rotation_error_deg": {
+        "mean": 1.2020854579962554,
+        "rms": 1.3308990281186797,
+        "max": 2.3408360028336066
+      }
+    }
+  },
+  "sample_residuals": [
+    {
+      "sample": "sample_1793605068566301025",
+      "board_reprojection_rms_px": 0.18113981390428152,
+      "fixed_target_translation_error_mm": 13.351811295575462,
+      "fixed_target_rotation_error_deg": 1.7171908254361603
+    },
+    {
+      "sample": "sample_1793605157431719971",
+      "board_reprojection_rms_px": 0.19571747783313714,
+      "fixed_target_translation_error_mm": 11.802758068164648,
+      "fixed_target_rotation_error_deg": 1.5990381788149128
+    },
+    {
+      "sample": "sample_1793605183417546143",
+      "board_reprojection_rms_px": 0.20298454209569455,
+      "fixed_target_translation_error_mm": 10.400352222211573,
+      "fixed_target_rotation_error_deg": 1.4698311799851147
+    },
+    {
+      "sample": "sample_1793605207602187012",
+      "board_reprojection_rms_px": 0.13578865720501485,
+      "fixed_target_translation_error_mm": 6.9525253341221935,
+      "fixed_target_rotation_error_deg": 0.5674561328000091
+    },
+    {
+      "sample": "sample_1793605229351368896",
+      "board_reprojection_rms_px": 0.18884225452542078,
+      "fixed_target_translation_error_mm": 9.150545344291714,
+      "fixed_target_rotation_error_deg": 2.0769320004678447
+    },
+    {
+      "sample": "sample_1793605304206636963",
+      "board_reprojection_rms_px": 0.11467221355415363,
+      "fixed_target_translation_error_mm": 3.3883101818400965,
+      "fixed_target_rotation_error_deg": 0.4711503225136466
+    },
+    {
+      "sample": "sample_1793605322820470459",
+      "board_reprojection_rms_px": 0.3719926156615088,
+      "fixed_target_translation_error_mm": 2.0129509717782783,
+      "fixed_target_rotation_error_deg": 1.3124055149529636
+    },
+    {
+      "sample": "sample_1793605435470426758",
+      "board_reprojection_rms_px": 0.21369090184645156,
+      "fixed_target_translation_error_mm": 2.5192085420274686,
+      "fixed_target_rotation_error_deg": 0.7162191080741782
+    },
+    {
+      "sample": "sample_1793605468227818115",
+      "board_reprojection_rms_px": 0.29888093557932577,
+      "fixed_target_translation_error_mm": 3.1866723380473116,
+      "fixed_target_rotation_error_deg": 1.2264483793732224
+    },
+    {
+      "sample": "sample_1793605516163052734",
+      "board_reprojection_rms_px": 0.2718565382081725,
+      "fixed_target_translation_error_mm": 1.4880248360191777,
+      "fixed_target_rotation_error_deg": 0.5217288463251814
+    },
+    {
+      "sample": "sample_1793605537879208008",
+      "board_reprojection_rms_px": 0.31501852913271056,
+      "fixed_target_translation_error_mm": 3.4884845984594848,
+      "fixed_target_rotation_error_deg": 1.2959830461764499
+    },
+    {
+      "sample": "sample_1793605715035347656",
+      "board_reprojection_rms_px": 0.2410942122544998,
+      "fixed_target_translation_error_mm": 8.296211681331206,
+      "fixed_target_rotation_error_deg": 1.9984866452497045
+    },
+    {
+      "sample": "sample_1793605744720633057",
+      "board_reprojection_rms_px": 0.3846534147536481,
+      "fixed_target_translation_error_mm": 4.445790616524892,
+      "fixed_target_rotation_error_deg": 1.516609922574838
+    },
+    {
+      "sample": "sample_1793605768735907959",
+      "board_reprojection_rms_px": 0.44502658498568337,
+      "fixed_target_translation_error_mm": 9.486438462545904,
+      "fixed_target_rotation_error_deg": 1.0933937147632242
+    },
+    {
+      "sample": "sample_1793605841649208740",
+      "board_reprojection_rms_px": 0.40289666995693496,
+      "fixed_target_translation_error_mm": 11.378730099487301,
+      "fixed_target_rotation_error_deg": 0.9426554395466762
+    },
+    {
+      "sample": "sample_1793605870767899902",
+      "board_reprojection_rms_px": 0.24182536362031576,
+      "fixed_target_translation_error_mm": 7.389542376880827,
+      "fixed_target_rotation_error_deg": 0.6992696268685135
+    },
+    {
+      "sample": "sample_1793605891516058838",
+      "board_reprojection_rms_px": 0.26945990148985616,
+      "fixed_target_translation_error_mm": 8.514677250054987,
+      "fixed_target_rotation_error_deg": 1.0391934987778866
+    },
+    {
+      "sample": "sample_1793605919599766357",
+      "board_reprojection_rms_px": 0.08179001305349724,
+      "fixed_target_translation_error_mm": 5.26569901012613,
+      "fixed_target_rotation_error_deg": 0.329542463970625
+    },
+    {
+      "sample": "sample_1793605941914452881",
+      "board_reprojection_rms_px": 0.12155196974910383,
+      "fixed_target_translation_error_mm": 3.2166211263134414,
+      "fixed_target_rotation_error_deg": 0.5036957093497769
+    },
+    {
+      "sample": "sample_1793606010059538574",
+      "board_reprojection_rms_px": 0.10608072131036604,
+      "fixed_target_translation_error_mm": 6.247934680849485,
+      "fixed_target_rotation_error_deg": 0.6807060723163981
+    }
+  ],
+  "interpretation": "Validation errors measure how consistently the fixed board pose is reconstructed. They are not a direct guarantee of object localization accuracy. Validate on new poses.",
+  "camera_link_T_camera_color_optical": {
+    "meaning": "Factory transform reported by the active RealSense ROS driver",
+    "matrix": [
+      [
+        -0.003425010003993423,
+        -0.0014843406047383581,
+        0.9999930329954515,
+        -0.00024147912336
+      ],
+      [
+        -0.9999890456867639,
+        0.003195367558851303,
+        -0.003420253300466407,
+        0.0146837104112
+      ],
+      [
+        -0.003190268475858941,
+        -0.9999937931603042,
+        -0.0014952685106621733,
+        1.13465821414e-05
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "translation_m": [
+      -0.00024147912336,
+      0.0146837104112,
+      1.13465821414e-05
+    ],
+    "quaternion_xyzw": [
+      -0.498717076845133,
+      0.5020248116561338,
+      -0.49968349330713324,
+      0.49956858614313326
+    ]
+  },
+  "link8_T_camera_link": {
+    "meaning": "TF-tree attachment transform; pose of camera_link in fr3_link8",
+    "matrix": [
+      [
+        0.010780747747835488,
+        -0.7155801013107586,
+        0.6984474884242075,
+        0.015230276858832442
+      ],
+      [
+        -0.01592101148597399,
+        -0.6985223752683595,
+        -0.7154110794799812,
+        -0.032386042881378384
+      ],
+      [
+        0.9998151313474205,
+        -0.0034073241016720694,
+        -0.018923352536089944,
+        -0.04948983093251857
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "translation_m": [
+      0.015230276858832442,
+      -0.032386042881378384,
+      -0.04948983093251857
+    ],
+    "quaternion_xyzw": [
+      0.6573101390425005,
+      -0.27821764390486425,
+      0.645913747141295,
+      0.27080205868096024
+    ]
+  }
+}

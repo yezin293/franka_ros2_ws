@@ -18,3 +18,6 @@ __pycache__/
 /*.jpg
 /*.jpeg
 /*.png
+
+# Local hand-eye samples (images and robot poses)
+/calibration_data/
