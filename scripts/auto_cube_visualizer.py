@@ -139,7 +139,7 @@ def main():
                         cv2.circle(view, (target_u, target_v), 10, (0, 0, 255), 3)
                         cv2.putText(
                             view, (f'PLACE x={target_x:.3f} y={target_y:.3f} '
-                                   f'yaw={np.degrees(target_yaw):.0f}'),
+                                   f'yaw_offset={np.degrees(target_yaw):+.0f}'),
                             (max(4, target_u-105), max(50, target_v-18)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 0, 255), 2,
                             cv2.LINE_AA)

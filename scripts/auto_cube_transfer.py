@@ -9,11 +9,13 @@ import json
 import math
 from pathlib import Path
 import random
+import threading
 import time
 
 import cv2
 import numpy as np
 import rclpy
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
@@ -23,8 +25,9 @@ from detect_black_cube_rgbd import depth_metres, image_bgr, tf_matrix
 from select_black_cube_rgbd import dark_candidates, estimate_square_from_depth
 from click_pick_place_sequence import (
     CUBE_SIZE, LIFT_HEIGHT, PLACE_TCP_Z, SURFACE_Z,
-    execute_cartesian, execute_near_home, pick_and_lift, pose,
+    current_downward, execute_cartesian, execute_near_home, pick_and_lift, pose,
 )
+from fr3_skills.motion import _quat_rotate
 from fr3_skills.motion import Fr3Motion
 
 
@@ -32,8 +35,52 @@ TRAY_CENTER_X = 0.415
 TRAY_CENTER_ABS_Y = 0.130
 PLACE_RADIUS_MIN = 0.040
 PLACE_RADIUS_MAX = 0.050
+PLACE_YAW_OFFSET_LIMIT = math.radians(30.0)
 AUTO_DARK_THRESHOLD = 75
 TRAY_CENTERS_PATH = Path('calibration_data/tray_centers.json')
+HOME_CAMERA_SETTLE_SECONDS = 1.0
+
+
+class CameraReceiver:
+    """Continuously receive camera data on a node independent of arm motion."""
+
+    def __init__(self):
+        self.node = rclpy.create_node('auto_cube_camera_receiver')
+        self.lock = threading.Lock()
+        self.colors = deque(maxlen=60)
+        self.depths = deque(maxlen=60)
+        self.infos = deque(maxlen=5)
+        self.subscriptions = [
+            self.node.create_subscription(
+                Image, '/camera/camera/color/image_raw',
+                lambda message: self._append(self.colors, message),
+                qos_profile_sensor_data),
+            self.node.create_subscription(
+                Image, '/camera/camera/aligned_depth_to_color/image_raw',
+                lambda message: self._append(self.depths, message),
+                qos_profile_sensor_data),
+            self.node.create_subscription(
+                CameraInfo, '/camera/camera/color/camera_info',
+                lambda message: self._append(self.infos, message),
+                qos_profile_sensor_data),
+        ]
+        self.executor = SingleThreadedExecutor()
+        self.executor.add_node(self.node)
+        self.thread = threading.Thread(target=self.executor.spin, daemon=True)
+        self.thread.start()
+
+    def _append(self, queue, message):
+        with self.lock:
+            queue.append((time.monotonic(), message))
+
+    def snapshot(self):
+        with self.lock:
+            return list(self.colors), list(self.depths), list(self.infos)
+
+    def close(self):
+        self.executor.shutdown()
+        self.thread.join(timeout=2.0)
+        self.node.destroy_node()
 
 
 def find_valid_cube_squares(frame, depth, camera_matrix, base_to_camera):
@@ -125,51 +172,39 @@ def find_valid_cube_squares(frame, depth, camera_matrix, base_to_camera):
     return candidates, valid, failures
 
 
-def auto_detect_cube(motion, calibration_path, timeout=30.0):
+def auto_detect_cube(motion, camera, calibration_path, timeout=30.0):
     calibration = json.loads(calibration_path.read_text())
     link8_to_camera = np.asarray(
         calibration['link8_T_camera_color_optical']['matrix'], dtype=float)
-    # Reset perception after every return to HOME. This deliberately discards
-    # every frame from the previous transfer and starts with empty buffers.
-    perception = getattr(motion, '_auto_cube_perception', None)
-    if perception is not None:
-        for subscription in perception['subscriptions']:
-            motion.destroy_subscription(subscription)
-    perception = {
-        'colors': deque(maxlen=30),
-        'depths': deque(maxlen=30),
-        'infos': deque(maxlen=5),
-    }
-    perception['subscriptions'] = [
-        motion.create_subscription(
-            Image, '/camera/camera/color/image_raw',
-            perception['colors'].append, qos_profile_sensor_data),
-        motion.create_subscription(
-            Image, '/camera/camera/aligned_depth_to_color/image_raw',
-            perception['depths'].append, qos_profile_sensor_data),
-        motion.create_subscription(
-            CameraInfo, '/camera/camera/color/camera_info',
-            perception['infos'].append, qos_profile_sensor_data),
-    ]
-    motion._auto_cube_perception = perception
-    colors = perception['colors']
-    depths = perception['depths']
-    infos = perception['infos']
+    # A one-shot run naturally has a pause before detection. In a continuous
+    # run the wrist has just reached HOME, so let vibration, auto exposure and
+    # aligned depth settle before accepting a frame.
+    print(f'waiting {HOME_CAMERA_SETTLE_SECONDS:.1f} s for HOME camera/TF settling...')
+    time.sleep(HOME_CAMERA_SETTLE_SECONDS)
+    print('HOME settled; detecting cube from fresh RGB-D...')
+
+    # Only accept frames that arrive after HOME settling. The receiver
+    # itself stays alive and keeps spinning while arm actions block this thread.
+    request_time = time.monotonic()
     deadline = time.monotonic() + timeout
-    last_error = 'waiting for RGB-D after perception reset'
+    last_error = 'waiting for fresh RGB-D from background camera receiver'
     warned_stamp_gap = False
     while rclpy.ok() and time.monotonic() < deadline:
             rclpy.spin_once(motion, timeout_sec=0.05)
+            all_colors, all_depths, infos = camera.snapshot()
+            colors = [item for item in all_colors if item[0] >= request_time]
+            depths = [item for item in all_depths if item[0] >= request_time]
             if not colors or not depths or not infos:
+                last_error = (f'background camera receiver counts: RGB={len(colors)}, '
+                              f'depth={len(depths)}, camera_info={len(infos)}')
                 continue
-            # Both queues were created at HOME, so every message is new.
-            color_msg = colors[-1]
+            color_msg = colors[-1][1]
             color_ns = Time.from_msg(color_msg.header.stamp).nanoseconds
             depth_msg = min(
                 depths,
-                key=lambda depth: abs(
-                    color_ns-Time.from_msg(depth.header.stamp).nanoseconds))
-            info = infos[-1]
+                key=lambda item: abs(
+                    color_ns-Time.from_msg(item[1].header.stamp).nanoseconds))[1]
+            info = infos[-1][1]
             color_stamp = Time.from_msg(color_msg.header.stamp)
             depth_stamp = Time.from_msg(depth_msg.header.stamp)
             stamp_gap_ms = abs(
@@ -241,12 +276,20 @@ def sample_opposite_tray_target(source_y, rng):
         x = centre_x + radius*math.cos(angle)
         y = centre_y + radius*math.sin(angle)
         if 0.36 <= x <= 0.47 and 0.08 <= abs(y) <= 0.19:
-            yaw = rng.uniform(0.0, math.pi/2.0)
+            yaw = rng.uniform(-PLACE_YAW_OFFSET_LIMIT, PLACE_YAW_OFFSET_LIMIT)
             return x, y, yaw, angle
     raise RuntimeError('failed to sample a safe point on the opposite tray')
 
 
-def place_with_random_yaw(motion, x, y, yaw):
+def place_with_random_yaw(motion, x, y, yaw_offset):
+    current, _ = current_downward(motion)
+    current_x = _quat_rotate(current[3:7], (1.0, 0.0, 0.0))
+    home_yaw = math.atan2(current_x[1], current_x[0])
+    yaw = math.atan2(math.sin(home_yaw+yaw_offset),
+                     math.cos(home_yaw+yaw_offset))
+    print(f'place yaw: HOME {math.degrees(home_yaw):+.1f} deg '
+          f'+ offset {math.degrees(yaw_offset):+.1f} deg '
+          f'= {math.degrees(yaw):+.1f} deg')
     quaternion = (math.cos(yaw/2.0), math.sin(yaw/2.0), 0.0, 0.0)
     hover_z = PLACE_TCP_Z + LIFT_HEIGHT
     execute_cartesian(motion, pose(x, y, hover_z, quaternion), 'move above random place')
@@ -274,13 +317,14 @@ def main():
 
     rclpy.init()
     motion = Fr3Motion()
+    camera = CameraReceiver()
     try:
         episode = 0
         expected_source_sign = None
         while rclpy.ok() and (args.continuous or episode < args.episodes):
             episode += 1
             print(f'=== AUTO TRANSFER EPISODE {episode} ===')
-            selection = auto_detect_cube(motion, args.calibration)
+            selection = auto_detect_cube(motion, camera, args.calibration)
             source_x, source_y, _ = selection['visible_top_center_fr3_link0_m']
             source_sign = 1 if source_y > 0 else -1
             if expected_source_sign is not None and source_sign != expected_source_sign:
@@ -299,7 +343,7 @@ def main():
                 'target_tray': 'left (+Y)' if place_y > 0 else 'right (-Y)',
                 'place_xy_m': [place_x, place_y],
                 'place_circle_angle_deg': math.degrees(circle_angle),
-                'place_yaw_deg': math.degrees(place_yaw),
+                'place_yaw_offset_from_home_deg': math.degrees(place_yaw),
                 'execute': args.execute,
             }, indent=2))
             if not args.execute:
@@ -311,6 +355,7 @@ def main():
             expected_source_sign = 1 if place_y > 0 else -1
             print(f'AUTO TRANSFER EPISODE {episode} COMPLETE')
     finally:
+        camera.close()
         motion.destroy_node()
         rclpy.try_shutdown()
 

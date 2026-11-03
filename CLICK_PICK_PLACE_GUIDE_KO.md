@@ -17,6 +17,7 @@
 - D435i RGB와 aligned depth가 실행 중이어야 한다.
 - 주사위와 놓을 위치는 트레이 벽 및 가운데 볼트에서 충분히 떨어져 있어야 한다.
 - 접촉 또는 예상하지 못한 움직임이 보이면 즉시 Desk Stop을 누른다.
+- 현재 이동 스케일은 Cartesian `0.32`, HOME 관절 이동 `0.20`이다. 첫 실행에서는 정지 버튼을 즉시 누를 수 있는 상태로 경로를 확인한다.
 
 ## 터미널 1: FR3 및 그리퍼 Bringup
 
@@ -65,7 +66,41 @@ ros2 run controller_manager spawner fr3_arm_controller \
 
 컨트롤러는 평소 `inactive` 상태이며, 각 이동 직전에만 활성화되고 완료 후 다시 비활성화된다.
 
-## 터미널 4: 전체 Pick & Place 시퀀스
+## 터미널 4: D435i RGB-D 실행 (필수)
+
+자동 검출과 시각화에는 RealSense RGB, Depth, aligned Depth가 모두 필요하다.
+
+```bash
+cd /home/nuc/ros2_ws/src/franka_ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 launch realsense2_camera rs_launch.py \
+  enable_color:=true \
+  enable_depth:=true \
+  enable_sync:=true \
+  align_depth.enable:=true
+```
+
+이 터미널도 작업이 끝날 때까지 계속 실행해 둔다. 터미널을 닫거나
+RealSense 노드가 종료되면 자동 이송은 `waiting for RGB-D` 오류로 중단되고,
+`auto_cube_visualizer.py` 화면도 나타나지 않는다.
+
+다른 터미널에서 필수 토픽을 확인한다.
+
+```bash
+ros2 topic list | grep camera
+```
+
+다음 세 토픽이 모두 있어야 한다.
+
+```text
+/camera/camera/color/image_raw
+/camera/camera/color/camera_info
+/camera/camera/aligned_depth_to_color/image_raw
+```
+
+## 터미널 5: 전체 Pick & Place 시퀀스
 
 ```bash
 cd /home/nuc/ros2_ws/src/franka_ros2_ws
@@ -90,7 +125,7 @@ python3 scripts/click_pick_place_sequence.py
 
 - 물체가 없는 평평한 트레이 바닥을 클릭한다.
 - 트레이 벽과 가운데 볼트에서 최소 6 cm 이상 떨어진 위치를 선택한다.
-- 로봇은 배치 TCP `z=0.0402 m`까지 하강한다.
+- 로봇은 배치 TCP `z=0.0502 m`까지 하강한다.
 - 그리퍼를 열어 주사위를 트레이 바닥에 놓는다.
 - 물체를 놓은 뒤 20 cm 수직 상승한다.
 - 이어서 `config/poses.yaml`의 `home` 자세로 이동하며 그리퍼는 열린 상태를 유지한다.
@@ -154,10 +189,11 @@ python3 scripts/auto_cube_transfer.py --execute --continuous
 4. 비슷한 후보가 둘 이상이면 자동 선택하지 않고 중단한다.
 5. 주사위를 파지하고 20 cm 상승한 뒤 HOME/READY 자세로 이동한다.
 6. 현재 주사위가 있는 트레이의 반대편 트레이를 선택한다.
-7. 트레이 중심 볼트에서 반지름 5.5 cm인 원 위의 안전 후보를 샘플링한다.
-8. 배치 yaw를 0~90°에서 무작위로 선택한다.
+7. 직접 클릭해 저장한 트레이 중심에서 반지름 4~5 cm인 고리 영역의 후보를 샘플링한다.
+8. HOME 자세의 현재 yaw를 기준으로 배치 yaw 오프셋을 -30~+30°에서 무작위로 선택한다.
 9. 배치 후 다음 에피소드의 검출 트레이가 직전 목표 트레이와 일치하는지 확인한다.
 10. 바닥보다 설정된 높이에서 놓은 뒤 HOME/READY 자세로 복귀한다.
+11. 연속 실행에서는 다음 검출 전에 HOME에서 1초간 대기하여 손목 진동, 카메라 자동 노출, aligned depth와 TF가 안정된 뒤 새 RGB-D 프레임을 사용한다.
 
 `--execute`가 없으면 절대로 로봇을 움직이지 않는다. 트레이나 볼트 위치가 변경되면 코드의 트레이 중심 및 안전 반지름을 다시 측정해야 한다.
 
@@ -179,7 +215,7 @@ python3 scripts/auto_cube_visualizer.py
 - 굵은 초록 사각형: 자동 이송 코드가 최종 선택할 후보
 - 빨간 상태 글자: 유효한 주사위가 없음
 
-HOME 시야의 자동 노출에서도 검은 주사위를 찾도록 자동 검출의 밝기 임계값은 `115`를 사용한다. 밝기를 완화하더라도 Depth 크기·수평면·트레이 위치 검사를 모두 통과해야 최종 후보가 된다.
+HOME 시야의 자동 노출에서도 검은 주사위를 찾도록 자동 검출의 밝기 임계값은 `75`를 사용한다. RGB 윤곽 검출이 실패하면 트레이 내부의 어두운 Depth 점을 추가로 탐색하며, Depth 크기·수평면·트레이 위치 검사를 모두 통과해야 최종 후보가 된다.
 
 창을 종료하려면 `Q` 또는 `Esc`를 누른다. 같은 영상은 `/auto_cube/debug_image` 토픽으로도 발행된다.
 
@@ -193,7 +229,7 @@ ros2 run rqt_image_view rqt_image_view /auto_cube/debug_image
 ros2 topic list | grep aligned_depth_to_color
 ```
 
-토픽이 없다면 실행 중인 RealSense 노드에서 다음 파라미터를 설정한다.
+토픽이 없다면 위의 **터미널 4: D435i RGB-D 실행** 명령으로 RealSense 노드를 먼저 실행한다. 노드는 있지만 aligned depth만 없다면 다음 파라미터를 설정한다.
 
 ```bash
 ros2 param set /camera/camera enable_depth true
