@@ -21,3 +21,9 @@ __pycache__/
 
 # Local hand-eye samples (images and robot poses)
 /calibration_data/
+
+# Imitation-learning demos recorded by scripts/auto_cube_transfer.py --execute
+/data/
+
+# BC / ACT checkpoints from il/train.py
+/runs/
