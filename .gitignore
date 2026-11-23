@@ -8,6 +8,7 @@ src/franka_ros2/
 src/libfranka/
 src/franka_description/
 src/olvx_descriptions_module/
+src/realsense-ros/
 
 __pycache__/
 *.pyc

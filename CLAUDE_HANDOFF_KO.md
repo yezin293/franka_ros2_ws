@@ -1,8 +1,8 @@
 # Claude 인수인계 — Franka 실물 제어
 
-최종 기록: 2026-10-30 (한국 시간). 이 문서를 먼저 읽고 PROJECT_CONTEXT.md 및 FRANKA_PROJECT_PLAN_KO.md를 참고한다. 과거 기록과 충돌하면 최신 날짜의 확인된 결과를 우선한다. 저장 시점의 실시간 로봇 상태는 조회하지 않았다. 맨 아래 "2026-10-29~30 — KAERI 이전, ArUco/체커보드 재보정, 실물 pick-place 성공, 라이브 비전 파이프라인 재설계" 절이 가장 최신. **하드웨어가 KAERI로 이전했고, 위쪽(2026-10-12 이전)의 테이블/환경 관련 기록은 대학 연구실 기준이라 더 이상 안 맞을 수 있다 — 물리 배치는 맨 아래 최신 절 기준.**
+최종 기록: 2026-11-23 (한국 시간). 이 문서를 먼저 읽고 PROJECT_CONTEXT.md 및 FRANKA_PROJECT_PLAN_KO.md를 참고한다. 과거 기록과 충돌하면 최신 날짜의 확인된 결과를 우선한다. 저장 시점의 실시간 로봇 상태는 조회하지 않았다. 맨 아래 "2026-11-23 — 다음 연구 방향 결정 + eye-in-hand(D435I) 전환, hand-eye 캘리브레이션 성공" 절이 가장 최신. **카메라가 고정식 eye-to-hand(OBSBOT)에서 손목장착 eye-in-hand(Intel RealSense D435I)로 바뀌었다 — 10월 작업(OBSBOT 체커보드/ArUco 캘리브레이션 관련 기록)은 이제 구 버전 참고용이고, 현재 유효한 캘리브레이션은 `scripts/eih_extrinsics.json`.**
 
-**Git 커밋이 밀려있다.** 2026-10-12 오후 작업부터 쭉 커밋/푸시 안 됨(스크립트 다수, `object_pose_publisher.py`, `motion.py`/`pose_listener.py`/`pick_place.py`/`vision_pick_place.py`, `config/vision_pick_place.yaml`, 캘리브레이션 결과물 등). 다른 컴퓨터에서 이어서 작업하면 이 내용이 없다 — 먼저 `git status`로 확인할 것.
+**Git 커밋이 밀려있다.** 2026-10-12 오후 작업부터 쭉 커밋/푸시 안 됨(스크립트 다수, `object_pose_publisher.py`, `motion.py`/`pose_listener.py`/`pick_place.py`/`vision_pick_place.py`, `config/vision_pick_place.yaml`, 캘리브레이션 결과물, `src/realsense-ros/`, `research_notes/`, `reports/` 등). 다른 컴퓨터에서 이어서 작업하면 이 내용이 없다 — 먼저 `git status`로 확인할 것.
 
 **2026-10-30 중 실물 충돌/리플렉스로 추정되는 정지가 있었지만 같은 세션에서 복구 완료**(맨 아래 "9. 실물 충돌/리플렉스 복구 — 해결됨" 절 — bringup 재기동 전체 순서 포함), 이후 비전 파이프라인(큐브 pick-place) 실물 성공까지 확인됨("11. 비전 파이프라인 실물 성공" 절).
 
@@ -520,3 +520,35 @@ udev 규칙(위 다음에 할 일 3번, 이제 해결됨)으로 USB autosuspend�
 4. 실제 pick 대상(원통)은 이번 세션 중 분실되어 큐브로만 검증함 — 원통으로도 재검증 필요.
 5. OBSBOT 중력처짐/완전멈춤 증상은 여전히 미해결(udev로 고친 건 autosuspend뿐) — 수 분 유휴 후 재발 가능, 매번 tilt 재설정/USB 재연결 필요.
 6. `width`/`epsilon` 값은 큐브 기준 추정치 — 다른 물체(원통 등)로 바꾸면 `config/vision_pick_place.yaml`에서 재조정 필요.
+
+## 2026-11-23 (Claude) — 다음 연구 방향 결정 + eye-in-hand(D435I) 전환, hand-eye 캘리브레이션 성공
+
+### 1. 다음 연구 방향: 여러 번 논의 끝에 "규칙기반 + 좁은 지도학습"으로 확정
+
+사용자가 다음 연구 주제를 KAERI 빈피킹 결과를 바탕으로 고민. 논의 순서:
+- deep-research 스킬(병렬 서브에이전트 3개 + 보고서 작성자 1개)로 2025~2026년 Active Perception/Closed-loop/Failure-aware/Imitation Learning/VLA 최신 논문 조사 — 결과는 `research_notes/단일 로봇팔 Physical AI 연구주제/`, `reports/단일 로봇팔 Physical AI 연구주제.md`.
+- 1차 추천("실패유형 조건부 능동 재관측", 규칙기반, 학습無)에 사용자가 "연구적 의의 부족·취업시장 Physical AI 트렌드 반영 못함"으로 반박 → Isaac Lab RL로 전체 의사결정(관측/파지/재시도/포기)을 학습하는 방향으로 재설계(`rl_active_perception_design.md`, State/Action/Reward/Termination 정의, Phase 0~5 로드맵 포함) — 단, 이 머신 GPU가 RTX 2060 Mobile 6GB라 Isaac Sim은 돌아가지만 병렬환경 수는 8~16개로 제한 필요함을 확인(`nvidia-smi`).
+- 이 과정에서 사용자의 **별도 프로젝트** `/home/wynz/flanka_robo_ws`(KAERI 인턴 기간 중 작업, 이동형 양팔 Franka로 고소작업 대체, Isaac Sim 기반)를 처음 발견 — `kaeri_work_summary.md`에 사용자 본인이 "RL은 이미 잘 되는 것을 대체하면 손해, 해석적 방법이 막히는 지점에만", "자율보다 원격조종 먼저"라고 명시한 철학이 있어 이번 RL 전면 도입 방향과 충돌함을 지적. 두 프로젝트는 분리하기로 합의.
+- 최종 합의(`final_roadmap.md`): **RL 전체 적용은 보류**, 대신 (a) 실패분류/행동선택은 규칙 기반 그대로, (b) 유일하게 규칙이 약한 지점인 "다음 관측 시점(next-view) 정보량 스코어링"만 Isaac Sim에서 생성한 ground-truth 라벨로 **지도학습**(RL 아님, Isaac Lab 불필요) 소형 모델로 대체. Phase 1(4~6주, 규칙기반+경량학습 스코어러) → Phase 2(추후, Phase 1에서 자동으로 쌓인 실물 로그를 시연데이터 삼아 VLA/디퓨전 정책 파인튜닝, 사람 시연 불필요).
+
+### 2. 카메라를 eye-to-hand(OBSBOT) → eye-in-hand(Intel RealSense D435I)로 전환
+
+Phase 1의 1단계. 기존 OBSBOT 관련 사진(`checkerboard_photo.jpg` 등 4개, eye-to-hand 전용) git rm으로 삭제, 루트의 옛 테스트 사진도 삭제해 정리.
+
+- D435I는 USB로 정상 인식되지만 `ros-humble-realsense2-camera` **apt 바이너리가 깨져 있었음**(`libdiagnostic_updater.so: cannot open shared object file` — 설치된 `diagnostic_updater` 4.0.0은 헤더 전용 패키지인데 apt 바이너리는 공유라이브러리가 있던 옛 버전 기준으로 빌드돼 ABI 불일치). **해결**: `src/realsense-ros`에 소스 clone, `ros2-development`(최신) 브랜치는 설치된 librealsense2 2.59.1보다 새 SDK 심볼(`RS2_STREAM_POINT_CLOUD` 등)을 요구해 또 실패 → **태그 `4.59.1`로 체크아웃**(librealsense2 버전과 맞춤) 후 colcon build 성공. `ros-humble-launch-pytest`, `python3-tqdm` rosdep 의존성 사용자가 직접 sudo 설치.
+- 빌드 후 `ros2 launch realsense2_camera rs_launch.py enable_depth:=true enable_color:=true` 정상 동작 확인, RGB(1280x720)+Depth(848x480) 토픽 전부 발행됨. `/camera/camera/color/camera_info`로 D435I **공장 캘리브레이션 intrinsics**(fx=912.35, fy=912.26, cx=640.33, cy=379.61, dist_coeffs 전부 0) 확보 → `scripts/eih_camera_intrinsics.json` 저장, 별도 intrinsics 캘리브레이션(체커보드 촬영) 불필요했음.
+
+### 3. Eye-in-hand hand-eye 캘리브레이션 — 기존 "그리퍼로 터치" 기법 재사용해서 성공
+
+핵심 설계: eye-to-hand 때처럼 체커보드를 고정해두고 네 귀퉁이를 그리퍼로 터치해 robot-frame 좌표를 한 번만 확보(`touch_points.json`의 `eih_top_left`/`eih_top_right`/`eih_bottom_left`/`eih_bottom_right`) → 로봇을 **여러 자세로 움직이며**(체커보드가 계속 보이게, 회전 다양하게) 매 자세에서 (사진 + 그 순간 손목 TCP 포즈)를 저장 → 각 사진에서 `solvePnP`로 "그 순간 카메라의 로봇기준 포즈" 계산 → 손목 포즈와 결합해 **손목→카메라 고정 오프셋**(flange-to-camera)을 매 샘플마다 역산 후 평균.
+
+- 체커보드는 예전 intrinsics 캘리브레이션에 쓰던 작은 11x8칸(16mm) 보드 재사용(큐브/마커는 이전 세션에서 분실됨). 귀퉁이 터치 중 두 번 이름 라벨링 실수(빨강을 파랑으로, 노랑을 파랑으로 등) 발생 — `touch_points.json` 키 이름을 직접 rename해서 수정. 최종 4점 간 거리를 이론값(9칸×16mm=144mm, 6칸×16mm=96mm, 대각선 173mm — **주의: 칸수-1이 아니라 칸수-2가 극단 코너 사이 간격**, 처음에 이 계산을 잘못해서 "오차 10~15%"라고 잘못 진단했다가 사용자가 지적해서 정정)과 비교해 1~4mm 오차로 확인, 터치 정밀도 자체는 우수했음.
+- `scripts/eih_capture_live.py` 신규: OpenCV 라이브 프리뷰(스페이스바=캡처, ESC=종료)로 샘플 수집 — 기존 opencv-python(GUI 버전, Qt5) 그대로 사용 가능했음(headless 재발 없음). 23개 샘플 수집(`scripts/eih_samples/NN.jpg` + `poses.json`).
+- `scripts/calibrate_eye_in_hand.py` 신규: 위 설계 그대로 구현(bilinear 보간은 `calibrate_extrinsics_checkerboard.py`와 동일 로직 재사용), 평면 solvePnP의 **pose-flip 모호성**으로 3개 샘플(z축이 50~70cm나 차이나는 명백한 이상치)이 나와 MAD(median absolute deviation) 기반 자동 이상치 제거 추가. **최종 20/23 샘플로 계산**: flange→camera 오프셋 x=+5.6mm, y=-37.2mm, z=-58.2mm, 샘플 간 표준편차 6~12mm(이전 eye-to-hand 체커보드 캘리브레이션의 독립검증 오차 23mm보다 좋음 — 손목-카메라 고정오프셋 하나만 구하는 문제라 원래 더 단순함). `scripts/eih_extrinsics.json` 저장.
+
+### 다음에 할 일 (Claude) — 최신
+
+1. **`object_pose_publisher.py`를 eye-in-hand용으로 업데이트** — 매 프레임마다 "그 순간 손목 포즈(실시간) × `eih_extrinsics.json`(고정 오프셋)"로 카메라의 로봇기준 포즈를 계산하도록 교체(기존 `pixel_to_robot_xy`의 "고정 카메라 extrinsics" 가정을 "손목 포즈에 따라 매번 달라지는 카메라 pose"로 일반화). `surface_z` 평면 가정도 D435I 깊이값으로 대체할지 검토(원래 로드맵에서 "깊이로 평면가정 불필요해질 수 있음"이라고 해둔 부분).
+2. Phase 1의 2~3단계 진행: 성공/실패/판정불확실 3단 분류기 구현, B0/B1/B2 규칙기반 베이스라인 실물 구현, next-view 스코어러용 Isaac Sim 라벨 생성.
+3. Git 커밋/푸시 필요 — 이번 세션 전체(`src/realsense-ros/` 소스 추가, `scripts/calibrate_eye_in_hand.py`/`eih_capture_live.py`/`eih_capture_pose.py`, `scripts/eih_*.json`, `scripts/eih_samples/`, `research_notes/`, `reports/`, 옛 OBSBOT 사진 삭제 등) 로컬에만 있음. `src/realsense-ros`는 원본 서드파티 패키지라 `.gitignore` 처리할지(`src/franka_ros2` 등과 동일하게) 검토 필요 — 아직 `fr3.repos`에도 안 올라가 있음.
+4. `scripts/touch_points.json`에 이제 eye-to-hand(OBSBOT)용 옛 키(`corner_cam_*`, `pos2_*`, `cb_*`, `left_bolt`/`right_bolt`)와 eye-in-hand(D435I)용 새 키(`eih_*`)가 섞여 있음 — 혼동 방지를 위해 당장은 손대지 않았으나, OBSBOT 쪽을 완전히 안 쓰게 되면 정리 고려.

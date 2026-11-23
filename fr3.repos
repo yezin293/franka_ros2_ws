@@ -16,3 +16,7 @@ repositories:
     type: git
     url: https://github.com/olive-robotics/olvx_descriptions_module.git
     version: c3444ed
+  realsense-ros:
+    type: git
+    url: https://github.com/IntelRealSense/realsense-ros.git
+    version: 4.59.1
