@@ -1,6 +1,6 @@
-"""Continuously detect the largest dark blob and publish its robot-frame
-pose, live, until Ctrl+C -- a normal always-on perception node, not a
-one-shot snapshot.
+"""Continuously detect the cube (YOLOv8, fine-tuned on scripts/yolo_roboflow_dataset)
+and publish its robot-frame pose, live, until Ctrl+C -- a normal always-on
+perception node, not a one-shot snapshot.
 
   ros2 run fr3_skills object_pose_publisher
   ros2 run fr3_skills object_pose_publisher --save /tmp/check.jpg   # overwrite each frame
@@ -9,25 +9,32 @@ Also publishes an annotated debug view (detection box/centroid, no cv_bridge
 needed) to <topic>/debug_image -- watch it with:
   ros2 run rqt_image_view rqt_image_view /object_pose/debug_image
 
-All tunables (device, resolution, topic, rate, surface_z, calibration file
-paths) come from config/vision_pick_place.yaml -- edit that file directly
-(with --symlink-install, no rebuild needed) instead of passing flags.
+All tunables (image topic, rate, surface_z, calibration file paths) come
+from config/vision_pick_place.yaml -- edit that file directly (with
+--symlink-install, no rebuild needed) instead of passing flags.
 
-Needs scripts/camera_intrinsics.json (see scripts/calibrate_intrinsics_from_folder.py)
-and scripts/camera_extrinsics.json (see scripts/calibrate_extrinsics.py).
+Eye-in-hand camera (D435I on the wrist, see 2026-11-23 handoff section):
+unlike the old fixed OBSBOT camera, this one moves with the arm, so its
+pose in robot base frame is NOT constant. Needs scripts/eih_camera_intrinsics.json
+(the camera's own factory calibration) and scripts/eih_extrinsics.json (the
+FIXED flange->camera offset from scripts/calibrate_eye_in_hand.py). Every
+frame, the current flange pose is looked up over tf2 (fr3_link0 ->
+fr3_hand_tcp) and combined with that fixed offset to get the camera's
+current pose in robot base frame.
 
-Pixel -> robot-frame xy is done by back-projecting the detected pixel into a
-3D ray from the camera (using the intrinsics to undistort/normalize, and the
-extrinsics -- the camera's pose in robot base frame from the checkerboard/
-ArUco + solvePnP calibration -- to express that ray in robot frame) and
-intersecting it with the known tray-surface plane (z = surface_z, measured
-by touching the tray floor with the gripper -- see
-scripts/touch_points.json's 'tray_surface').
+Pixel -> robot-frame xyz is done with the D435I's own depth reading at the
+detected pixel (back-projected via the intrinsics, then rotated into robot
+frame via that frame's extrinsics) -- not a planar assumption. The old
+"intersect the ray with a known flat surface" approach (z = surface_z) is
+kept only as a fallback for frames where the depth pixel is invalid (e.g.
+glare, out of range), since depth pretending the object sits exactly on the
+tray floor silently mispredicts xy (the detected pixel is on the object's
+*top* face, not the floor) in proportion to how oblique the view is --
+fine for a near-overhead view, bad for a far/angled one.
 """
 import argparse
 import json
 import os
-import time
 
 import cv2
 import numpy as np
@@ -37,19 +44,21 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from std_msgs.msg import Empty
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
-from fr3_skills.motion import BASE_FRAME
+from fr3_skills.motion import BASE_FRAME, TCP_LINK
 
-# Dark-object threshold for the black cylinders/cube on the grey tray
-# (temporary -- swap for YOLO or another detector once picking by color
-# isn't enough).
-DARK_THRESHOLD = 70
-MIN_AREA = 1000
-# Pixel region containing the pick tray, at the 3840x2160 calibration
-# resolution -- excludes the cluttered background (chairs, clothing) above
-# the trays, which is otherwise darker/bigger than the object and wins the
-# "largest blob" pick. Re-measure if the camera is reframed.
-ROI = (1050, 1450, 1750, 2160)  # x0, y0, x1, y1
+YOLO_CONF_THRESHOLD = 0.8 #confidence 값 조절
+OUTLIER_RESET_STREAK = 3       # consecutive gated-out detections before re-anchoring to them
+NO_DETECTION_RESET_STREAK = 3  # consecutive empty frames before dropping the smoothed estimate
+CONFIRM_SAMPLES = 2            # consecutive agreeing readings required after a (re-)anchor
+                                # before publishing -- a single fresh anchor is unvalidated
+                                # (nothing to compare it against yet), so a noisy-but-not-wild
+                                # first depth sample would otherwise be trusted immediately and
+                                # bias the EMA for a while
 
 CONFIG_PATH = os.path.join(get_package_share_directory('fr3_skills'),
                             'config', 'vision_pick_place.yaml')
@@ -61,21 +70,49 @@ def load_config():
 
 
 def load_calibration(intrinsics_path, extrinsics_path):
+    """Returns (camera_matrix, dist_coeffs, R_flange_cam, t_flange_cam) --
+    the last two are the FIXED flange->camera offset (a point in camera
+    frame, transformed by R_flange_cam/t_flange_cam, lands in flange frame)."""
     with open(intrinsics_path) as f:
         intr = json.load(f)
     camera_matrix = np.array(intr['camera_matrix'])
     dist_coeffs = np.array(intr['dist_coeffs'])
     with open(extrinsics_path) as f:
         extr = json.load(f)
-    rvec = np.array(extr['rvec'])
-    tvec = np.array(extr['tvec'])
-    return camera_matrix, dist_coeffs, rvec, tvec
+    t_flange_cam = np.array(extr['flange_to_camera_xyz'])
+    R_flange_cam = _quat_to_R(*extr['flange_to_camera_quat_xyzw'])
+    return camera_matrix, dist_coeffs, R_flange_cam, t_flange_cam
+
+
+def _quat_to_R(x, y, z, w):
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ])
+
+
+def current_camera_extrinsics(flange_xyz, flange_quat_xyzw, R_flange_cam, t_flange_cam):
+    """Combine the live flange pose (base->flange) with the fixed
+    flange->camera offset to get this instant's base->camera extrinsics
+    (rvec, tvec in the same convention cv2.solvePnP would give: a
+    robot-frame point transforms into camera frame via P_cam = R@P_base+t)."""
+    R_base_flange = _quat_to_R(*flange_quat_xyzw)
+    t_base_flange = np.array(flange_xyz)
+    # cam -> base (point in cam frame, expressed in base frame)
+    R_cam_base = R_base_flange @ R_flange_cam
+    t_cam_base = R_base_flange @ t_flange_cam + t_base_flange
+    # invert -> base -> cam
+    R_base_cam = R_cam_base.T
+    t_base_cam = -R_base_cam @ t_cam_base
+    rvec, _ = cv2.Rodrigues(R_base_cam)
+    return rvec, t_base_cam
 
 
 def pixel_to_robot_xy(px, py, camera_matrix, dist_coeffs, rvec, tvec, surface_z):
     """Back-project a pixel to a ray and intersect it with the z=surface_z
-    plane in robot base frame. rvec/tvec are the robot-frame-to-camera-frame
-    extrinsics from cv2.solvePnP (object_points were given in robot frame)."""
+    plane in robot base frame. rvec/tvec are this instant's robot-frame-to-
+    camera-frame extrinsics."""
     undistorted = cv2.undistortPoints(
         np.array([[[px, py]]], dtype=np.float64), camera_matrix, dist_coeffs)
     ray_cam = np.array([undistorted[0, 0, 0], undistorted[0, 0, 1], 1.0])
@@ -94,66 +131,57 @@ def pixel_to_robot_xy(px, py, camera_matrix, dist_coeffs, rvec, tvec, surface_z)
     return point[0], point[1]
 
 
-def detect(frame):
-    """Return ((px, py), (bx, by, bw, bh)) for the largest dark blob in ROI,
-    both in full-frame pixel coordinates, or (None, None) if nothing found."""
-    x0, y0, x1, y1 = ROI
-    roi = frame[y0:y1, x0:x1]
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(gray, DARK_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((9, 9), np.uint8))
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = [c for c in contours if cv2.contourArea(c) > MIN_AREA]
-    if not contours:
+def sample_depth(depth_frame, px, py, scale, patch=5):
+    """Median depth (meters) in a small patch around (px, py), ignoring
+    invalid (0) pixels. Returns None if nothing valid is in the patch."""
+    h, w = depth_frame.shape
+    half = patch // 2
+    x0, x1 = max(0, int(px) - half), min(w, int(px) + half + 1)
+    y0, y1 = max(0, int(py) - half), min(h, int(py) + half + 1)
+    region = depth_frame[y0:y1, x0:x1]
+    valid = region[region > 0]
+    if valid.size == 0:
+        return None
+    return float(np.median(valid)) * scale
+
+
+def pixel_depth_to_robot_xyz(px, py, depth_m, camera_matrix, dist_coeffs, rvec, tvec):
+    """Back-project a pixel using its own measured depth (no surface-plane
+    assumption) to get the robot-frame 3D point directly."""
+    undistorted = cv2.undistortPoints(
+        np.array([[[px, py]]], dtype=np.float64), camera_matrix, dist_coeffs)
+    ray_cam = np.array([undistorted[0, 0, 0], undistorted[0, 0, 1], 1.0])
+    point_cam = ray_cam * depth_m
+
+    R, _ = cv2.Rodrigues(rvec)
+    camera_pos = (-R.T @ tvec).flatten()
+    return camera_pos + R.T @ point_cam
+
+
+def detect(frame, model):
+    """Return ((px, py), (bx, by, bw, bh)) for the highest-confidence YOLO
+    detection, both in full-frame pixel coordinates, or (None, None) if
+    nothing passed YOLO_CONF_THRESHOLD."""
+    result = model.predict(frame, conf=YOLO_CONF_THRESHOLD, verbose=False)[0]
+    if len(result.boxes) == 0:
         return None, None
-    largest = max(contours, key=cv2.contourArea)
-    M = cv2.moments(largest)
-    if M['m00'] == 0:
-        return None, None
-    px, py = M['m10'] / M['m00'] + x0, M['m01'] / M['m00'] + y0
-    bx, by, bw, bh = cv2.boundingRect(largest)
-    return (px, py), (bx + x0, by + y0, bw, bh)
+    best = result.boxes[result.boxes.conf.argmax()]
+    x0, y0, x1, y1 = best.xyxy[0].tolist()
+    px, py = (x0 + x1) / 2, (y0 + y1) / 2
+    return (px, py), (int(x0), int(y0), int(x1 - x0), int(y1 - y0))
 
 
 def annotate(frame, centroid, box):
-    """Draw the ROI and, if found, the detected object's box/centroid."""
+    """Draw the detected object's box/centroid, if found."""
     out = frame.copy()
-    cv2.rectangle(out, ROI[:2], ROI[2:], (255, 0, 0), 3)
     if box is not None:
         x, y, w, h = box
         cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 0), 4)
         cv2.circle(out, (int(centroid[0]), int(centroid[1])), 10, (0, 255, 255), -1)
     else:
-        cv2.putText(out, 'no object', (ROI[0], ROI[1] - 15),
+        cv2.putText(out, 'no object', (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
     return out
-
-
-def open_camera(device, width, height):
-    cap = cv2.VideoCapture(device)
-    if not cap.isOpened():
-        raise SystemExit(f'could not open camera /dev/video{device}')
-    # VideoCapture defaults to the YUYV format, which this camera only
-    # supports up to 640x480 -- silently breaking the calibration (done
-    # against the camera's native resolution). 3840x2160 only exists under
-    # MJPG (v4l2-ctl --list-formats-ext).
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    actual_w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-    actual_h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-    if (actual_w, actual_h) != (width, height):
-        print(f'warning: camera gave {actual_w:.0f}x{actual_h:.0f}, '
-              f'not the requested {width}x{height} -- '
-              'pixel->robot mapping will be wrong unless intrinsics/extrinsics '
-              'were calibrated at this size')
-    # The very first frame after opening at this format/resolution comes back
-    # black, and auto-exposure/auto-focus can still be settling for a few
-    # more frames after that -- discard some before trusting any frame.
-    time.sleep(1.0)
-    for _ in range(5):
-        cap.read()
-    return cap
 
 
 def main():
@@ -163,59 +191,184 @@ def main():
     args = parser.parse_args()
     cfg = load_config()
 
-    camera_matrix, dist_coeffs, rvec, tvec = load_calibration(
+    camera_matrix, dist_coeffs, R_flange_cam, t_flange_cam = load_calibration(
         cfg['intrinsics'], cfg['extrinsics'])
-    cap = open_camera(cfg['device'], cfg['cam_width'], cfg['cam_height'])
+    from ultralytics import YOLO
+    model = YOLO(cfg['yolo_weights'])
 
     rclpy.init()
     node = Node('object_pose_publisher')
+    tf_buffer = Buffer()
+    TransformListener(tf_buffer, node)
+
     pub = node.create_publisher(PoseStamped, cfg['topic'], 10)
     debug_topic = cfg['topic'] + '/debug_image'
     image_pub = node.create_publisher(Image, debug_topic, 1)
+
+    latest = {}
+
+    def image_cb(msg):
+        frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+        latest['frame'] = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        latest['stamp'] = msg.header.stamp
+
+    def depth_cb(msg):
+        latest['depth'] = np.frombuffer(msg.data, dtype=np.uint16).reshape(msg.height, msg.width)
+
+    node.create_subscription(Image, cfg['image_topic'], image_cb, 1)
+    node.create_subscription(Image, cfg['depth_topic'], depth_cb, 1)
+
+    state = {'x': None, 'y': None, 'z': None, 'miss_streak': 0, 'outlier_streak': 0,
+              'confirm_count': 0}
+
+    def reset_cb(_msg):
+        # Requested by vision_pick_place.py at the start of each cycle --
+        # without this, the smoothed estimate carries over from whatever the
+        # camera saw during the PREVIOUS cycle's own motion (gripper, tray
+        # walls, background, ...), and a genuinely new object in the pick
+        # tray gets rejected as an "outlier" against that stale, unrelated
+        # anchor instead of being tracked fresh.
+        state['x'] = state['y'] = state['z'] = None
+        state['miss_streak'] = 0
+        state['outlier_streak'] = 0
+        state['confirm_count'] = 0
+        print('    tracking reset (requested by vision_pick_place)')
+
+    reset_topic = cfg['topic'] + '/reset'
+    node.create_subscription(Empty, reset_topic, reset_cb, 1)
+
     period = 1.0 / cfg['publish_rate_hz']
     print(f"publishing live detections on {cfg['topic']} at "
           f"{cfg['publish_rate_hz']} Hz -- Ctrl+C to stop")
     print(f'debug view: ros2 run rqt_image_view rqt_image_view {debug_topic}')
+    print(f'tracking reset topic: {reset_topic} (std_msgs/Empty)')
+    print(f"waiting for images on {cfg['image_topic']} and {cfg['depth_topic']} ...")
     img_msg = Image()
     img_msg.encoding = 'bgr8'
     img_msg.is_bigendian = 0
     try:
         while rclpy.ok():
-            ok, frame = cap.read()
-            if ok:
-                centroid, box = detect(frame)
-                if centroid is None:
-                    print('no object detected')
+            rclpy.spin_once(node, timeout_sec=period)
+            if 'frame' not in latest or 'depth' not in latest:
+                continue
+            frame = latest['frame']
+            depth_frame = latest['depth']
+
+            try:
+                # Look up the flange pose AT THE FRAME'S OWN TIMESTAMP, not
+                # "latest" -- if the arm is still moving (e.g. right as it
+                # arrives home, before fully settling), "latest" would give a
+                # newer, different pose than when this photo was actually
+                # taken, producing a geometrically wrong extrinsics and wild
+                # 3D errors. Matching the frame's own stamp removes that race
+                # regardless of how long inference takes or how fast the arm
+                # is moving.
+                tf = tf_buffer.lookup_transform(BASE_FRAME, TCP_LINK,
+                                                 rclpy.time.Time.from_msg(latest['stamp']))
+            except TransformException as e:
+                print(f'no TF {BASE_FRAME}->{TCP_LINK} at frame time yet: {e}')
+                continue
+            flange_xyz = (tf.transform.translation.x, tf.transform.translation.y,
+                          tf.transform.translation.z)
+            flange_quat = (tf.transform.rotation.x, tf.transform.rotation.y,
+                           tf.transform.rotation.z, tf.transform.rotation.w)
+            rvec, tvec = current_camera_extrinsics(flange_xyz, flange_quat,
+                                                     R_flange_cam, t_flange_cam)
+
+            centroid, box = detect(frame, model)
+            if centroid is None:
+                print('no object detected')
+                state['miss_streak'] += 1
+                if state['miss_streak'] >= NO_DETECTION_RESET_STREAK and state['x'] is not None:
+                    print('    no detections for a while -- resetting smoothed estimate')
+                    state['x'] = state['y'] = state['z'] = None
+                    state['outlier_streak'] = 0
+            else:
+                px, py = centroid
+                depth_m = sample_depth(depth_frame, px, py, cfg['depth_scale'])
+                if depth_m is not None:
+                    x, y, z = pixel_depth_to_robot_xyz(px, py, depth_m, camera_matrix,
+                                                         dist_coeffs, rvec, tvec)
+                    source = 'depth'
                 else:
-                    px, py = centroid
                     x, y = pixel_to_robot_xy(px, py, camera_matrix, dist_coeffs,
                                               rvec, tvec, cfg['surface_z'])
-                    msg = PoseStamped()
-                    msg.header.stamp = node.get_clock().now().to_msg()
-                    msg.header.frame_id = BASE_FRAME
-                    msg.pose.position.x = float(x)
-                    msg.pose.position.y = float(y)
-                    msg.pose.position.z = cfg['pick_z']
-                    msg.pose.orientation.x = 1.0  # pointing straight down
-                    msg.pose.orientation.w = 0.0
-                    pub.publish(msg)
-                    print(f'pixel ({px:.0f}, {py:.0f}) -> robot '
-                          f'(x={x:+.3f}, y={y:+.3f})')
+                    z = cfg['surface_z']
+                    source = 'fallback(no depth)'
 
-                annotated = annotate(frame, centroid, box)
-                small = cv2.resize(annotated, (1280, 720))
-                if args.save:
-                    cv2.imwrite(args.save, small)
-                img_msg.header.stamp = node.get_clock().now().to_msg()
-                img_msg.height, img_msg.width = small.shape[:2]
-                img_msg.step = img_msg.width * 3
-                img_msg.data = small.tobytes()
-                image_pub.publish(img_msg)
-            rclpy.spin_once(node, timeout_sec=period)
+                if not (cfg['z_sane_min'] <= z <= cfg['z_sane_max']):
+                    # A bad depth sample (glare, reflection, a mixed edge pixel) can
+                    # put z wildly off -- check this BEFORE touching state, since
+                    # right after a reset there's no existing anchor for the
+                    # outlier gate below to compare against, so a garbage first
+                    # reading would otherwise be trusted unconditionally.
+                    print(f'    rejecting frame -- z={z:+.3f} outside sane range '
+                          f"[{cfg['z_sane_min']:+.3f}, {cfg['z_sane_max']:+.3f}] [{source}]")
+                    state['miss_streak'] += 1
+                    if state['miss_streak'] >= NO_DETECTION_RESET_STREAK and state['x'] is not None:
+                        print('    no good detections for a while -- resetting smoothed estimate')
+                        state['x'] = state['y'] = state['z'] = None
+                        state['outlier_streak'] = 0
+                else:
+                    state['miss_streak'] = 0
+                    publish_ok = False
+                    if state['x'] is None:
+                        state['x'], state['y'], state['z'] = x, y, z
+                        state['outlier_streak'] = 0
+                        state['confirm_count'] = 0
+                    else:
+                        jump = ((x - state['x']) ** 2 + (y - state['y']) ** 2) ** 0.5
+                        if jump > cfg['outlier_gate_m']:
+                            state['outlier_streak'] += 1
+                            print(f'    ignoring outlier jump={jump:.3f}m [{source}] '
+                                  f'(streak {state["outlier_streak"]}/{OUTLIER_RESET_STREAK})')
+                            if state['outlier_streak'] >= OUTLIER_RESET_STREAK:
+                                print('    outlier persisted -- re-anchoring to it')
+                                state['x'], state['y'], state['z'] = x, y, z
+                                state['outlier_streak'] = 0
+                                state['confirm_count'] = 0
+                        else:
+                            state['outlier_streak'] = 0
+                            a = cfg['ema_alpha']
+                            state['x'] = a * x + (1 - a) * state['x']
+                            state['y'] = a * y + (1 - a) * state['y']
+                            state['z'] = a * z + (1 - a) * state['z']
+                            # A fresh (or re-)anchor is unvalidated -- nothing existed to
+                            # compare it against -- so require a few consecutive agreeing
+                            # readings before trusting it, instead of publishing immediately
+                            # on whatever the first, possibly noisy, sample happened to be.
+                            if state['confirm_count'] < CONFIRM_SAMPLES:
+                                state['confirm_count'] += 1
+                                print(f'    confirming anchor '
+                                      f'({state["confirm_count"]}/{CONFIRM_SAMPLES}) ...')
+                            publish_ok = state['confirm_count'] >= CONFIRM_SAMPLES
+
+                    if publish_ok:
+                        grasp_z = state['z'] + cfg['grasp_clearance_z']
+                        msg = PoseStamped()
+                        msg.header.stamp = node.get_clock().now().to_msg()
+                        msg.header.frame_id = BASE_FRAME
+                        msg.pose.position.x = state['x']
+                        msg.pose.position.y = state['y']
+                        msg.pose.position.z = grasp_z
+                        msg.pose.orientation.x = 1.0  # pointing straight down
+                        msg.pose.orientation.w = 0.0
+                        pub.publish(msg)
+                        print(f'pixel ({px:.0f}, {py:.0f}) -> robot smoothed '
+                              f'(x={state["x"]:+.3f}, y={state["y"]:+.3f}, grasp_z={grasp_z:+.3f}) '
+                              f'[{source}]')
+
+            annotated = annotate(frame, centroid, box)
+            if args.save:
+                cv2.imwrite(args.save, annotated)
+            img_msg.header.stamp = node.get_clock().now().to_msg()
+            img_msg.height, img_msg.width = annotated.shape[:2]
+            img_msg.step = img_msg.width * 3
+            img_msg.data = annotated.tobytes()
+            image_pub.publish(img_msg)
     except KeyboardInterrupt:
         pass
     finally:
-        cap.release()
         node.destroy_node()
         rclpy.try_shutdown()
 

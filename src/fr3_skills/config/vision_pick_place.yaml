@@ -3,18 +3,35 @@
 # --symlink-install, changes are picked up on the next run, no rebuild needed.
 
 # -- camera / detection --
-device: 0
-cam_width: 3840
-cam_height: 2160
+# D435I is eye-in-hand (wrist-mounted), driven by the realsense2_camera ROS2
+# node -- run that separately (ros2 launch realsense2_camera rs_launch.py
+# enable_depth:=false enable_color:=true), this node just subscribes.
+image_topic: /camera/camera/color/image_raw
+depth_topic: /camera/camera/aligned_depth_to_color/image_raw   # needs align_depth.enable:=true
+depth_scale: 0.001      # raw depth units (uint16, mm) -> meters
 topic: /object_pose
 publish_rate_hz: 2.0
 surface_z: 0.0222       # robot-frame z of the tray floor (touch_points.json 'tray_surface')
-intrinsics: scripts/camera_intrinsics.json
-extrinsics: scripts/camera_extrinsics.json
+                         # -- only used as a fallback when a frame has no valid depth reading
+intrinsics: scripts/eih_camera_intrinsics.json   # D435I factory calibration
+extrinsics: scripts/eih_extrinsics.json          # fixed flange->camera offset (calibrate_eye_in_hand.py)
+yolo_weights: scripts/yolo_cube_best.pt          # fine-tuned YOLOv8n (scripts/yolo_roboflow_dataset), replaces the old dark-threshold detector/ROI
+ema_alpha: 0.3           # published pose = exponential moving average of per-frame detections
+                          # (higher = less smoothing, more responsive to real motion)
+outlier_gate_m: 0.05     # ignore a single detection this far [m] from the current smoothed
+                          # estimate (e.g. a one-off control-box misdetection); 3 in a row
+                          # re-anchors instead, since that means the real target moved/changed
 
 # -- pick/place geometry --
-pick_z: 0.03            # TCP height to grasp at [m]
-place: [0.40, 0.15, 0.03]
+z_sane_min: 0.0          # reject a detection outright if its measured z [m] falls
+z_sane_max: 0.15          # outside this range (catches a bad depth sample, e.g.
+                          # glare/reflection, before it ever reaches the anchor/EMA)
+grasp_clearance_z: 0.005  # TCP grasp height = measured object-top z + this [m]
+place: [0.4261, -0.1276, 0.03]   # measured via touch_points.json's 'place_tray_center' (2026-11-24)
+pick_region_y_min: 0.0   # only treat a detection as a new pick target if y >= this
+                          # (pick tray is the +y side, place tray is -y -- ignores the
+                          # object once it's been placed, so vision_pick_place.py's loop
+                          # doesn't immediately pick it back up)
 width: 0.05              # object width [m] -- gripper needs this to recognize a good grasp
 epsilon: 0.025           # grasp width tolerance [m] -- widened: physical grasps were
                           # succeeding but the firmware still reported failure because

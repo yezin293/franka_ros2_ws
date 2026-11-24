@@ -50,7 +50,7 @@ def main():
                     dry_run=dry_run, epsilon=args.epsilon)
         print('picked.' if not dry_run else 'pick: plan only (not executed)')
         motion.place(make_pose(args.place), approach_height=args.approach_height,
-                     scaling=args.scaling, dry_run=dry_run)
+                     dry_run=dry_run)
         print('placed.' if not dry_run else 'place: plan only (not executed)')
     except (RuntimeError, ValueError) as e:
         print('stopped:', e)

@@ -19,3 +19,13 @@ __pycache__/
 /*.jpg
 /*.jpeg
 /*.png
+
+# YOLO training artifacts -- reproducible from scripts/yolo_roboflow_dataset
+# (itself re-exportable from Roboflow) or by recapturing/relabeling. Only the
+# actual fine-tuned weights the pipeline loads (scripts/yolo_cube_best.pt)
+# are tracked, same pattern as homography.json above.
+/runs/
+/yolov8n.pt
+scripts/*.yolov8.zip
+scripts/yolo_dataset/
+scripts/yolo_roboflow_dataset/

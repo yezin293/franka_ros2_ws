@@ -327,22 +327,32 @@ class Fr3Motion(Node):
         finally:
             self.deactivate_arm()
 
-    def place(self, pose_stamped, approach_height=0.1, speed=0.1, scaling=0.1,
+    def place(self, pose_stamped, approach_height=0.1, speed=0.1,
               cartesian_scaling=1.0, dry_run=False):
-        """Approach above pose_stamped (TCP_LINK) freely, descend/retreat in a
-        straight line, release in between. dry_run=True only plans+prints each
-        leg (check RViz) -- no activate/execute/gripper calls, nothing moves
-        for real. See pick() for why cartesian_scaling defaults to 1.0."""
+        """Approach above pose_stamped (TCP_LINK) in a straight line (see note
+        below), descend/retreat in a straight line, release in between.
+        dry_run=True only plans+prints each leg (check RViz) -- no
+        activate/execute/gripper calls, nothing moves for real. See pick()
+        for why cartesian_scaling defaults to 1.0."""
+        # Unlike pick()'s 'approach' (coming from wherever the arm happens to
+        # be, e.g. just after move_home), place()'s 'approach' runs right
+        # after pick()'s retreat -- same height (approach_height above each
+        # target) on both ends. A straight Cartesian line between them stays
+        # level the whole way; OMPL doesn't guarantee that and was measured
+        # (2026-11-24) dipping low enough mid-transit to scrape the table
+        # between the pick and place trays, since tray walls aren't in the
+        # collision model for it to avoid. If the straight line itself is
+        # blocked, plan_cartesian_path raises instead of cutting through it.
         approach = self._approach_pose(pose_stamped, approach_height)
         if dry_run:
-            self._plan_leg('approach', approach, scaling, dry_run)
+            self._plan_leg('approach', approach, cartesian_scaling, dry_run, cartesian=True)
             self._plan_leg('descend', pose_stamped, cartesian_scaling, dry_run, cartesian=True)
             print(f'[gripper] would open_gripper(speed={speed})')
             self._plan_leg('retreat', approach, cartesian_scaling, dry_run, cartesian=True)
             return
         self.activate_arm()
         try:
-            self._plan_leg('approach', approach, scaling, dry_run)
+            self._plan_leg('approach', approach, cartesian_scaling, dry_run, cartesian=True)
             self._plan_leg('descend', pose_stamped, cartesian_scaling, dry_run, cartesian=True)
             self.open_gripper(speed=speed)
             self._plan_leg('retreat', approach, cartesian_scaling, dry_run, cartesian=True)
